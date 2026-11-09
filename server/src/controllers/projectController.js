@@ -132,6 +132,12 @@ function requireManager(membership) {
   }
 }
 
+function requireWritableMember(membership) {
+  if (membership.role === "viewer") {
+    throw new AppError("Viewers have read-only access", 403);
+  }
+}
+
 function assertAssigneesInWorkspace(workspace, ids) {
   const allowed = new Set(workspace.members.map((m) => getMemberUserId(m)));
   for (const id of ids) {
@@ -210,7 +216,8 @@ const list = asyncHandler(async (req, res) => {
 });
 
 const create = asyncHandler(async (req, res) => {
-  const { workspace } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  const { workspace, membership } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  requireWritableMember(membership);
   const project = await Project.create({
     workspace: workspace._id,
     name: req.body.name,
@@ -330,7 +337,8 @@ function notifyAssignees(io, { workspace, project, task, actor, ids, title, type
 }
 
 const createTask = asyncHandler(async (req, res) => {
-  const { project, workspace } = await loadProject(req);
+  const { project, workspace, membership } = await loadProject(req);
+  requireWritableMember(membership);
   const io = req.app.get("io");
   const columnId = req.body.columnId || project.columns[0]?.id || "todo";
   if (!project.columns.some((c) => c.id === columnId)) {
@@ -381,7 +389,8 @@ const createTask = asyncHandler(async (req, res) => {
 });
 
 const updateTask = asyncHandler(async (req, res) => {
-  const { project, workspace } = await loadProject(req);
+  const { project, workspace, membership } = await loadProject(req);
+  requireWritableMember(membership);
   assertObjectId(req.params.taskId, "task id");
   const io = req.app.get("io");
   const task = await Task.findOne({ _id: req.params.taskId, project: project._id });
@@ -473,6 +482,7 @@ const updateTask = asyncHandler(async (req, res) => {
 
 const removeTask = asyncHandler(async (req, res) => {
   const { project, workspace, membership } = await loadProject(req);
+  requireWritableMember(membership);
   assertObjectId(req.params.taskId, "task id");
   const existing = await Task.findOne({ _id: req.params.taskId, project: project._id });
   if (!existing) throw new AppError("Task not found", 404);
@@ -498,7 +508,8 @@ const removeTask = asyncHandler(async (req, res) => {
 });
 
 const addComment = asyncHandler(async (req, res) => {
-  const { project, workspace } = await loadProject(req);
+  const { project, workspace, membership } = await loadProject(req);
+  requireWritableMember(membership);
   assertObjectId(req.params.taskId, "task id");
   const task = await Task.findOne({ _id: req.params.taskId, project: project._id });
   if (!task) throw new AppError("Task not found", 404);
@@ -533,6 +544,7 @@ const addComment = asyncHandler(async (req, res) => {
 
 const removeComment = asyncHandler(async (req, res) => {
   const { project, membership } = await loadProject(req);
+  requireWritableMember(membership);
   assertObjectId(req.params.taskId, "task id");
   const task = await Task.findOne({ _id: req.params.taskId, project: project._id });
   if (!task) throw new AppError("Task not found", 404);

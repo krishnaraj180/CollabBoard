@@ -1,3 +1,5 @@
+const fs = require("fs");
+
 class AppError extends Error {
   constructor(message, status = 400, details) {
     super(message);
@@ -8,6 +10,22 @@ class AppError extends Error {
 
 function errorHandler(err, req, res, next) {
   if (res.headersSent) return next(err);
+
+  if (!req.uploadsPersisted) {
+    const uploadedPaths = new Set([
+      ...(req.uploadedFilePaths || []),
+      ...(req.files || []).map((file) => file.path).filter(Boolean),
+    ]);
+    for (const filePath of uploadedPaths) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch (cleanupError) {
+        if (cleanupError.code !== "ENOENT") {
+          console.error("Failed to clean up uploaded file:", cleanupError.message);
+        }
+      }
+    }
+  }
 
   if (err.name === "ZodError") {
     return res.status(400).json({

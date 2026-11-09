@@ -26,7 +26,7 @@ Real-time team collaboration: group chat, presence, file sharing, notifications,
 - **Public landing page** at `/`, redesigned sign-in and register pages (password show/hide, strength meter), 404 and error pages.
 - **Account page** (`/app/account`): change display name and avatar colour, change password (signs out other devices).
 - **Chat redesign:** avatars, grouped messages, timestamps, attachment chips, send button disabled when empty.
-- **Deployment ready:** Dockerfiles for API and web app, full-stack `docker compose --profile full`, health check, graceful shutdown, multi-origin CORS.
+- **Database-backed:** account credentials are hashed and saved in MongoDB; workspace, project, task, chat, notification, and activity changes are saved by the API.
 
 ## What's new in version 2
 
@@ -63,56 +63,54 @@ Real-time team collaboration: group chat, presence, file sharing, notifications,
 | admin | Invite/remove members (not other admins), edit workspace, set project status/due date, delete projects, delete any task |
 | member | Create projects, add/edit/comment on tasks, delete their own tasks, use channels they belong to |
 
-## Run everything with Docker (recommended for a real deployment)
-
-```bash
-cp .env.example .env          # set JWT_SECRET to a long random string
-docker compose --profile full up --build -d
-docker compose exec server node src/seed.js   # optional demo data (wipes the database)
-```
-
-Web app: http://localhost:3000 · API: http://localhost:5000/api/health.
-For a public deployment put both behind HTTPS, set `CLIENT_ORIGIN` to your web URL and `PUBLIC_API_URL` to your API URL (Socket.IO connects there from the browser), and keep `DEMO_LOGIN=false`.
-
 ## Local development setup
 
-Requirements: Node.js 20+, MongoDB (local or Docker), Git.
+Requirements: Node.js 20+, Docker Desktop (or another MongoDB instance), Git.
+
+Start MongoDB with a persistent Docker volume:
 
 ```bash
-# MongoDB via Docker
-docker compose up -d
+docker compose up -d mongodb
+```
 
+In one terminal, configure and start the API:
+
+```powershell
 cd server
 copy .env.example .env   # Windows (macOS/Linux: cp .env.example .env)
-# set JWT_SECRET to a long random string
-npm install
-npm run seed
-npm run dev
-
-# another terminal
-cd client
 npm install
 npm run dev
 ```
 
-Open http://localhost:3000
+In another terminal, configure and start the web app:
 
-### Demo users (after seed)
+```powershell
+cd client
+copy .env.example .env.local   # Windows (macOS/Linux: cp .env.example .env.local)
+npm install
+npm run dev
+```
 
-| Email | Password |
-| --- | --- |
-| krishna@collabboard.dev | Demo1234! |
-| maya@collabboard.dev | Demo1234! |
-| leo@collabboard.dev | Demo1234! |
+Open http://localhost:3000. The web app sends `/api` requests to the Express API at `API_URL`; Socket.IO connects to `NEXT_PUBLIC_SOCKET_URL`. The API connects to the database selected by `MONGODB_URI`. The sample values connect all three services on the same computer.
 
-Never commit `.env`. `server/.env` is gitignored. Use `.env.example` in interviews to show how secrets are injected.
+Registration creates a MongoDB user record with a hashed password. Logging in verifies that record and creates a session; workspace and collaboration content is written to MongoDB by the API. Data survives app restarts as long as the MongoDB volume is retained. For MongoDB Atlas or another database, replace `MONGODB_URI` in `server/.env` with its connection string. Never commit real environment files or production secrets.
+
+For a public deployment, set `CLIENT_ORIGIN` to the frontend origin, `MONGODB_URI` and `JWT_SECRET` on the API, `API_URL` for the Next.js server-side API rewrite, and `NEXT_PUBLIC_SOCKET_URL` to the browser-reachable Socket.IO URL. Use HTTPS and set `secure` production cookies. `NEXT_PUBLIC_SOCKET_URL` is embedded at build time.
+
+### Optional demo data
+
+Run `npm run seed` from `server/` only against a disposable database. **Seeding deletes the existing CollabBoard collections before adding the demo accounts and content.**
+
+Demo users (after seeding): `krishna@collabboard.dev`, `maya@collabboard.dev`, and `leo@collabboard.dev`; password: `Demo1234!`.
+
+Never commit `server/.env` or `client/.env.local`; both are gitignored. The checked-in `.env.example` files contain local-development values only.
 
 ## Scripts
 
 | Command | What it does |
 | --- | --- |
 | `npm run dev` in `server/` | API + Socket.IO on port 5000 |
-| `npm run dev` in `client/` | Next.js on 3000; `/api` is rewritten to Express, Socket.IO connects to port 5000 |
+| `npm run dev` in `client/` | Next.js on 3000; `/api` is rewritten to Express and Socket.IO connects to the configured backend |
 | `npm test` in `server/` | Auth, permissions, invalid input, realtime, project management |
 | `npm run seed` in `server/` | Demo workspace, board, chat |
 
