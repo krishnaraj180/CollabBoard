@@ -18,8 +18,14 @@ const channelSchema = z.object({
 async function loadWorkspace(id, userId) {
   const workspace = await Workspace.findById(id);
   if (!workspace) throw new AppError("Workspace not found", 404);
-  requireMember(workspace, userId);
-  return workspace;
+  const membership = requireMember(workspace, userId);
+  return { workspace, membership };
+}
+
+function requireWritableMember(membership) {
+  if (membership.role === "viewer") {
+    throw new AppError("Viewers have read-only access", 403);
+  }
 }
 
 function assertChannelMember(channel, userId) {
@@ -40,7 +46,8 @@ const listChannels = asyncHandler(async (req, res) => {
 });
 
 const createChannel = asyncHandler(async (req, res) => {
-  const workspace = await loadWorkspace(req.params.workspaceId, req.user._id);
+  const { workspace, membership } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  requireWritableMember(membership);
   const memberIds = new Set([String(req.user._id), ...(req.body.memberIds || [])]);
   const workspaceIds = new Set(workspace.members.map((m) => getMemberUserId(m)));
   for (const id of memberIds) {
@@ -77,7 +84,8 @@ const listMessages = asyncHandler(async (req, res) => {
 const createMessage = asyncHandler(async (req, res) => {
   const channel = await Channel.findById(req.params.channelId);
   if (!channel) throw new AppError("Channel not found", 404);
-  await loadWorkspace(channel.workspace, req.user._id);
+  const { membership } = await loadWorkspace(channel.workspace, req.user._id);
+  requireWritableMember(membership);
   assertChannelMember(channel, req.user._id);
 
   const body = (req.body.body || "").trim();
@@ -99,6 +107,7 @@ const createMessage = asyncHandler(async (req, res) => {
     body,
     attachments,
   });
+  req.uploadsPersisted = true;
   await message.populate("sender", "name email avatarColor");
 
   const payload = { message };

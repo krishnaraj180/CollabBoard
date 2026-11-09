@@ -41,11 +41,34 @@ describe("realtime + persistence", () => {
       .post(`/api/workspaces/${workspaceId}/projects`)
       .set("Cookie", cookieA)
       .send({ name: "Kanban" });
+    const privateChannel = await request(app)
+      .post(`/api/workspaces/${workspaceId}/channels`)
+      .set("Cookie", cookieA)
+      .send({ name: "private", memberIds: [] });
 
     const port = server.address().port;
     const sA = clientIo(`http://127.0.0.1:${port}`, { auth: { token: tokenA }, transports: ["websocket"] });
     const sB = clientIo(`http://127.0.0.1:${port}`, { auth: { token: tokenB }, transports: ["websocket"] });
+    const readyA = waitFor(sA, "presence:snapshot");
+    const readyB = waitFor(sB, "presence:snapshot");
     await Promise.all([waitFor(sA, "connect"), waitFor(sB, "connect")]);
+    await Promise.all([readyA, readyB]);
+
+    const joinDenied = await new Promise((resolve) => sB.emit("channel:join", privateChannel.body.channel._id, resolve));
+    expect(joinDenied).toMatchObject({ ok: false, error: "Forbidden" });
+    const typingDenied = await new Promise((resolve) =>
+      sB.emit("chat:typing", { channelId: privateChannel.body.channel._id, typing: true }, resolve)
+    );
+    expect(typingDenied).toMatchObject({ ok: false, error: "Forbidden" });
+
+    const channels = await request(app).get(`/api/workspaces/${workspaceId}/channels`).set("Cookie", cookieA);
+    const general = channels.body.channels.find((c) => c.name === "general");
+    const typingReceived = waitFor(sA, "chat:typing");
+    const typingAllowed = await new Promise((resolve) =>
+      sB.emit("chat:typing", { channelId: general._id, typing: true }, resolve)
+    );
+    expect(typingAllowed).toEqual({ ok: true });
+    expect(await typingReceived).toMatchObject({ channelId: general._id, typing: true });
 
     const received = waitFor(sB, "task:updated");
     const createdTask = await request(app)
@@ -56,8 +79,6 @@ describe("realtime + persistence", () => {
     const update = await received;
     expect(update.task.title).toBe("Ship sockets");
 
-    const channels = await request(app).get(`/api/workspaces/${workspaceId}/channels`).set("Cookie", cookieA);
-    const general = channels.body.channels.find((c) => c.name === "general");
     const posted = await request(app)
       .post(`/api/channels/${general._id}/messages`)
       .set("Cookie", cookieA)

@@ -23,6 +23,8 @@ const storage = multer.diskStorage({
   destination: dest,
   filename: (req, file, cb) => {
     const safe = `${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(file.originalname).slice(0, 8)}`;
+    req.uploadedFilePaths ||= [];
+    req.uploadedFilePaths.push(path.join(dest, safe));
     cb(null, safe);
   },
 });

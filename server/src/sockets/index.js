@@ -41,6 +41,15 @@ function onlineIds() {
   return [...socketsByUser.keys()];
 }
 
+async function findAuthorizedChannel(channelId, userId) {
+  const channel = await Channel.findById(channelId);
+  if (!channel) return null;
+  const workspace = await Workspace.findById(channel.workspace).select("members");
+  if (!workspace || !memberOf(workspace, userId)) return null;
+  if (!channel.members.some((id) => String(id) === String(userId))) return null;
+  return channel;
+}
+
 function attachSockets(io) {
   io.use(async (socket, next) => {
     try {
@@ -70,7 +79,11 @@ function attachSockets(io) {
     const workspaces = await Workspace.find({ "members.user": user._id }).select("_id members");
     workspaces.forEach((ws) => socket.join(`workspace:${ws._id}`));
 
-    const channels = await Channel.find({ members: user._id }).select("_id");
+    const workspaceIds = workspaces.map((ws) => ws._id);
+    const channels = await Channel.find({
+      members: user._id,
+      workspace: { $in: workspaceIds },
+    }).select("_id");
     channels.forEach((ch) => socket.join(`channel:${ch._id}`));
 
     socket.join(`user:${user._id}`);
@@ -87,13 +100,8 @@ function attachSockets(io) {
 
     socket.on("channel:join", async (channelId, ack) => {
       try {
-        const channel = await Channel.findById(channelId);
-        if (!channel) throw new Error("Channel not found");
-        const workspace = await Workspace.findById(channel.workspace);
-        if (!workspace || !memberOf(workspace, user._id)) throw new Error("Forbidden");
-        if (!channel.members.some((id) => String(id) === String(user._id))) {
-          throw new Error("Forbidden");
-        }
+        const channel = await findAuthorizedChannel(channelId, user._id);
+        if (!channel) throw new Error("Forbidden");
         socket.join(`channel:${channel._id}`);
         if (typeof ack === "function") ack({ ok: true });
       } catch (err) {
@@ -101,14 +109,28 @@ function attachSockets(io) {
       }
     });
 
-    socket.on("chat:typing", ({ channelId, typing }) => {
-      if (!channelId) return;
-      socket.to(`channel:${channelId}`).emit("chat:typing", {
-        channelId,
-        userId: String(user._id),
-        name: user.name,
-        typing: Boolean(typing),
-      });
+    socket.on("chat:typing", async ({ channelId, typing } = {}, ack) => {
+      if (!channelId) {
+        if (typeof ack === "function") ack({ ok: false, error: "Channel is required" });
+        return;
+      }
+      try {
+        const channel = await findAuthorizedChannel(channelId, user._id);
+        if (!channel) {
+          if (typeof ack === "function") ack({ ok: false, error: "Forbidden" });
+          return;
+        }
+        socket.to(`channel:${channel._id}`).emit("chat:typing", {
+          channelId: String(channel._id),
+          userId: String(user._id),
+          name: user.name,
+          typing: Boolean(typing),
+        });
+        if (typeof ack === "function") ack({ ok: true });
+      } catch (err) {
+        console.error("Socket typing authorization failed:", err.message);
+        if (typeof ack === "function") ack({ ok: false, error: "Unable to authorize channel" });
+      }
     });
 
     socket.on("disconnect", async () => {
