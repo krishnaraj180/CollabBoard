@@ -7,7 +7,48 @@ import AppShell from "../components/AppShell";
 import { ActivityFeed, Avatar } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
 import { useRealtime } from "../context/RealtimeContext";
+import { roleLabel } from "../lib/format";
 
+const workspaceRoles = [
+  ["admin", "Workspace admin"],
+  ["ceo", "CEO"],
+  ["managing_director", "Managing Director (MD)"],
+  ["cto", "CTO"],
+  ["project_manager", "Project Manager"],
+  ["engineering_manager", "Engineering Manager"],
+  ["team_lead", "Team Lead"],
+  ["development_team_lead", "Development Team Lead"],
+  ["react_developer", "React Developer"],
+  ["ui_developer", "UI Developer"],
+  ["nodejs_developer", "Node.js Developer"],
+  ["java_developer", "Java Developer"],
+  ["python_developer", "Python Developer"],
+  ["qa_manager", "QA Manager"],
+  ["qa_team_lead", "QA Team Lead"],
+  ["qa_engineer", "QA Engineer"],
+  ["design_manager", "Design Manager"],
+  ["design_team_lead", "Design Team Lead"],
+  ["ui_ux_designer", "UI/UX Designer"],
+  ["devops_manager", "DevOps Manager"],
+  ["devops_team_lead", "DevOps Team Lead"],
+  ["devops_engineer", "DevOps Engineer"],
+  ["finance_manager", "Finance Manager"],
+  ["accountant", "Accountant"],
+  ["finance_executive", "Finance Executive"],
+  ["marketing_manager", "Marketing Manager"],
+  ["marketing_team_lead", "Marketing Team Lead"],
+  ["marketing_executive", "Marketing Executive"],
+  ["hr_manager", "HR Manager"],
+  ["hr_executive", "HR Executive"],
+  ["recruiter", "Recruiter"],
+  ["hr_employee", "HR Employee"],
+  ["marketing", "Marketing"],
+  ["finance", "Finance"],
+  ["frontend_developer", "Frontend Developer (legacy)"],
+  ["backend_developer", "Backend Developer (legacy)"],
+  ["member", "Member"],
+  ["viewer", "Viewer (read only)"],
+];
 export default function Team() {
   const { workspaceId } = useParams();
   const { user } = useAuth();
@@ -18,6 +59,8 @@ export default function Team() {
   const [notice, setNotice] = useState("");
   const [invite, setInvite] = useState({ email: "", role: "member" });
   const [settings, setSettings] = useState({ name: "", description: "" });
+  const [newDepartment, setNewDepartment] = useState("");
+  const [positionDrafts, setPositionDrafts] = useState({});
 
   const myId = user?._id || user?.id;
   const me = workspace?.members?.find((m) => m.user?._id === myId);
@@ -89,6 +132,62 @@ export default function Team() {
     );
   };
 
+  const saveOrganizationMember = (member, changes) => {
+    const department = changes.department ?? member.department ?? "";
+    const title = changes.title ?? member.title ?? "";
+    const reportsTo = changes.reportsTo !== undefined ? changes.reportsTo : member.reportsTo || null;
+    run(
+      () => api(`/api/workspaces/${workspaceId}/members/${member.user._id}/organization`, {
+        method: "PATCH",
+        body: { department, title, reportsTo },
+      }),
+      "Organization assignment updated"
+    );
+  };
+
+  const saveDepartments = (departments) =>
+    {
+      const availablePositions = new Map(departments.map((department) => [department.name, new Set(department.positions)]));
+      const affectedMembers = workspace.members.filter((member) =>
+        member.department && !availablePositions.get(member.department)?.has(member.title)
+      ).length;
+      if (affectedMembers > 0 && !window.confirm(
+        `This change will clear department and position assignments for ${affectedMembers} teammate${affectedMembers === 1 ? "" : "s"}. Continue?`
+      )) return;
+      run(
+        () => api(`/api/workspaces/${workspaceId}/organization`, { method: "PATCH", body: { departments } }),
+        "Organization structure updated"
+      );
+    };
+
+  const addDepartment = (e) => {
+    e.preventDefault();
+    const name = newDepartment.trim();
+    if (!name) return;
+    if (workspace.organization.departments.some((department) => department.name.toLowerCase() === name.toLowerCase())) {
+      setError("A department with that name already exists.");
+      return;
+    }
+    saveDepartments([...workspace.organization.departments, { name, positions: [] }]);
+    setNewDepartment("");
+  };
+
+  const addPosition = (departmentName) => {
+    const position = (positionDrafts[departmentName] || "").trim();
+    if (!position) return;
+    const department = workspace.organization.departments.find((item) => item.name === departmentName);
+    if (department.positions.some((existing) => existing.toLowerCase() === position.toLowerCase())) {
+      setError("That position already exists in this department.");
+      return;
+    }
+    const departments = workspace.organization.departments.map((department) => {
+      if (department.name !== departmentName) return department;
+      return { ...department, positions: [...department.positions, position] };
+    });
+    saveDepartments(departments);
+    setPositionDrafts({ ...positionDrafts, [departmentName]: "" });
+  };
+
   const saveSettings = (e) => {
     e.preventDefault();
     run(() => api(`/api/workspaces/${workspaceId}`, { method: "PATCH", body: settings }), "Workspace updated");
@@ -114,7 +213,10 @@ export default function Team() {
                   <thead>
                     <tr>
                       <th>Person</th>
-                      <th>Role</th>
+                      <th>Access</th>
+                      <th>Department</th>
+                      <th>Position</th>
+                      <th>Reports to</th>
                       <th className="hide-sm">Joined</th>
                       <th aria-label="Actions" />
                     </tr>
@@ -127,7 +229,7 @@ export default function Team() {
                         m.role !== "owner" && isManager && !(role === "admin" && m.role === "admin");
                       return (
                         <tr key={m.user._id}>
-                          <td>
+                          <td data-label="Person">
                             <div className="who">
                               <Avatar user={m.user} size={32} />
                               <div>
@@ -138,19 +240,66 @@ export default function Team() {
                               </div>
                             </div>
                           </td>
-                          <td>
+                          <td data-label="Access">
                             {isOwner && m.role !== "owner" ? (
-                              <select value={m.role} onChange={(e) => changeRole(m.user._id, e.target.value)} aria-label={`Role for ${m.user.name}`}>
-                                <option value="member">member</option>
-                                <option value="admin">admin</option>
-                                <option value="viewer">viewer</option>
+                              <select value={m.role} onChange={(e) => changeRole(m.user._id, e.target.value)} aria-label={`Access role for ${m.user.name}`}>
+                                {workspaceRoles.map(([value, label]) => (
+                                  <option key={value} value={value}>{label}</option>
+                                ))}
                               </select>
                             ) : (
-                              <span className={`role-pill ${m.role}`}>{m.role}</span>
+                              <span className={`role-pill ${m.role}`}>{roleLabel(m.role)}</span>
                             )}
                           </td>
-                          <td className="hide-sm muted">{new Date(m.joinedAt).toLocaleDateString()}</td>
-                          <td>
+                          <td data-label="Department">
+                            {isManager ? (
+                              <select
+                                aria-label={`Department for ${m.user.name}`}
+                                value={m.department || ""}
+                                onChange={(e) => {
+                                  const department = e.target.value;
+                                  const positions = workspace.organization.departments.find((item) => item.name === department)?.positions || [];
+                                  saveOrganizationMember(m, { department, title: positions[0] || "" });
+                                }}
+                              >
+                                <option value="">Unassigned</option>
+                                {workspace.organization.departments.map((department) => (
+                                  <option key={department.name} value={department.name}>{department.name}</option>
+                                ))}
+                              </select>
+                            ) : <span>{m.department || "—"}</span>}
+                          </td>
+                          <td data-label="Position">
+                            {isManager ? (
+                              <select
+                                aria-label={`Position for ${m.user.name}`}
+                                value={m.title || ""}
+                                disabled={!m.department}
+                                onChange={(e) => saveOrganizationMember(m, { title: e.target.value })}
+                              >
+                                <option value="">Unassigned</option>
+                                {(workspace.organization.departments.find((item) => item.name === m.department)?.positions || []).map((title) => (
+                                  <option key={title} value={title}>{title}</option>
+                                ))}
+                              </select>
+                            ) : <span>{m.title || "—"}</span>}
+                          </td>
+                          <td data-label="Reports to">
+                            {isManager ? (
+                              <select
+                                aria-label={`Manager for ${m.user.name}`}
+                                value={m.reportsTo?._id || m.reportsTo || ""}
+                                onChange={(e) => saveOrganizationMember(m, { reportsTo: e.target.value || null })}
+                              >
+                                <option value="">No manager</option>
+                                {workspace.members.filter((candidate) => candidate.user._id !== m.user._id).map((candidate) => (
+                                  <option key={candidate.user._id} value={candidate.user._id}>{candidate.user.name}</option>
+                                ))}
+                              </select>
+                            ) : <span>{workspace.members.find((candidate) => candidate.user._id === String(m.reportsTo?._id || m.reportsTo))?.user.name || "—"}</span>}
+                          </td>
+                          <td data-label="Joined" className="hide-sm muted">{new Date(m.joinedAt).toLocaleDateString()}</td>
+                          <td data-label="Actions">
                             {canRemove && (
                               <button className="btn secondary" onClick={() => removeMember(m)}>
                                 Remove
@@ -165,8 +314,7 @@ export default function Team() {
               </div>
 
               <div className="role-help muted">
-                <strong>Owner</strong> manages everything including roles · <strong>Admin</strong> manages projects, status and members ·{" "}
-                <strong>Member</strong> works on tasks and chats · <strong>Viewer</strong> has read-only access.
+                <strong>Project workflow</strong> routes business approval to the MD, technical review to the CTO, planning and delivery to the Project Manager, then through design, engineering, QA, DevOps, Marketing, Finance, and final CEO/MD review.
               </div>
             </section>
 
@@ -179,12 +327,78 @@ export default function Team() {
                     <form className="col-form" onSubmit={sendInvite}>
                       <input type="email" required placeholder="name@company.com" value={invite.email} onChange={(e) => setInvite({ ...invite, email: e.target.value })} />
                       <select value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })}>
-                        <option value="member">member</option>
-                        <option value="admin">admin</option>
-                        <option value="viewer">viewer</option>
+                        {workspaceRoles.map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
                       </select>
                       <button className="btn">Add to workspace</button>
                     </form>
+                  </section>
+                  <section className="box">
+                    <h3>Organization setup</h3>
+                    <p className="muted">Manage the departments and positions available for team assignments.</p>
+                    <form className="col-form" onSubmit={addDepartment}>
+                      <input
+                        value={newDepartment}
+                        onChange={(e) => setNewDepartment(e.target.value)}
+                        placeholder="New department"
+                        maxLength={60}
+                        aria-label="New department"
+                      />
+                      <button className="btn secondary" disabled={!newDepartment.trim()}>Add department</button>
+                    </form>
+                    <div className="org-settings">
+                      {workspace.organization.departments.map((department) => (
+                        <div className="org-department" key={department.name}>
+                          <div className="org-department-head">
+                            <strong>{department.name}</strong>
+                            <button
+                              className="btn secondary"
+                              disabled={workspace.organization.departments.length <= 1}
+                              onClick={() => saveDepartments(workspace.organization.departments.filter((item) => item.name !== department.name))}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                          <ul>
+                            {department.positions.map((position) => (
+                              <li key={position}>
+                                {position}
+                                <button
+                                  className="org-remove-position"
+                                  aria-label={`Remove ${position} from ${department.name}`}
+                                  onClick={() => saveDepartments(workspace.organization.departments.map((item) =>
+                                    item.name === department.name
+                                      ? { ...item, positions: item.positions.filter((title) => title !== position) }
+                                      : item
+                                  ))}
+                                >
+                                  ×
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                          <div className="org-add-position">
+                            <input
+                              value={positionDrafts[department.name] || ""}
+                              onChange={(e) => setPositionDrafts({ ...positionDrafts, [department.name]: e.target.value })}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  addPosition(department.name);
+                                }
+                              }}
+                              placeholder="New position"
+                              maxLength={60}
+                              aria-label={`New position in ${department.name}`}
+                            />
+                            <button className="btn secondary" onClick={() => addPosition(department.name)} disabled={!(positionDrafts[department.name] || "").trim()}>
+                              Add
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </section>
                   <section className="box">
                     <h3>Workspace settings</h3>
@@ -198,7 +412,7 @@ export default function Team() {
               ) : (
                 <section className="box">
                   <h3>Member access</h3>
-                  <p className="muted">Only owners and admins can invite people or change roles. Ask one of them if you need access changed.</p>
+                  <p className="muted">Workspace owners and admins manage invitations. Project actions and approvals are limited to the assigned organizational roles.</p>
                 </section>
               )}
               <section className="box">

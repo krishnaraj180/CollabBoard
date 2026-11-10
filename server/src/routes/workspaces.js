@@ -12,6 +12,8 @@ router.get("/:id", workspaces.getOne);
 router.patch("/:id", validate(workspaces.updateSchema), workspaces.update);
 router.post("/:id/invites", validate(workspaces.inviteSchema), workspaces.invite);
 router.patch("/:id/members/:userId", validate(workspaces.roleSchema), workspaces.updateRole);
+router.patch("/:id/members/:userId/organization", validate(workspaces.organizationMemberSchema), workspaces.updateOrganizationMember);
+router.patch("/:id/organization", validate(workspaces.organizationSchema), workspaces.updateOrganization);
 router.delete("/:id/members/:userId", workspaces.removeMember);
 
 router.get("/:workspaceId/projects", projects.list);

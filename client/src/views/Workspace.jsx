@@ -7,7 +7,7 @@ import { api } from "../api";
 import AppShell from "../components/AppShell";
 import { ActivityFeed, Avatar, ProgressBar, StatCard, StatusBadge } from "../components/ui";
 import { useRealtime } from "../context/RealtimeContext";
-import { PROJECT_STATUS, formatDate } from "../lib/format";
+import { PROJECT_STATUS, formatDate, roleLabel } from "../lib/format";
 
 const FILTERS = [["all", "All"], ...Object.entries(PROJECT_STATUS).map(([id, m]) => [id, m.label])];
 const ACTIVITY_FILTERS = [["all", "All"], ["projects", "Projects"], ["tasks", "Tasks"], ["team", "Team"]];
@@ -84,6 +84,7 @@ export default function Workspace() {
   }, [socket, workspaceId]);
 
   const isManager = dash && ["owner", "admin"].includes(dash.myRole);
+  const canCreateProject = isManager || dash?.myRole === "project_manager";
 
   async function addProject(e) {
     e.preventDefault();
@@ -150,7 +151,7 @@ export default function Workspace() {
               <h1>{workspace.name}</h1>
               <p className="muted">{workspace.description || "Projects, chat, and people in one room."}</p>
             </div>
-            <span className="role-pill">{dash.myRole}</span>
+            <span className="role-pill">{roleLabel(dash.myRole)}</span>
           </div>
 
           <div className="stats-row">
@@ -174,7 +175,7 @@ export default function Workspace() {
                 </div>
               </div>
 
-              <details className="new-project">
+              {canCreateProject && <details className="new-project">
                 <summary className="btn secondary">+ New project</summary>
                 <form className="panel-form" onSubmit={addProject}>
                   <label className="field">
@@ -191,7 +192,7 @@ export default function Workspace() {
                   </label>
                   <button className="btn">Create project</button>
                 </form>
-              </details>
+              </details>}
 
               {projects.length === 0 && (
                 <div className="empty">{dash.projects.length === 0 ? "No projects yet. Create the first one above." : "No projects with this status."}</div>
@@ -204,6 +205,7 @@ export default function Workspace() {
                       <StatusBadge status={p.status} />
                     </div>
                     <p className="muted">{p.description || "Kanban board"}</p>
+                    <p className="muted">Workflow: {(p.workflowStage || "business_approval").replace(/_/g, " ")}</p>
                     <ProgressBar percent={p.stats.percent} label={`${p.name} progress`} />
                     <div className="card-foot">
                       <span>
@@ -229,7 +231,7 @@ export default function Workspace() {
                         <Avatar user={w.user} size={26} />
                         <span className={`dot ${online ? "on" : ""}`} title={online ? "Online" : "Offline"} />
                         <strong>{w.user.name}</strong>
-                        <span className="muted">{w.role}</span>
+                        <span className="muted">{roleLabel(w.role)}</span>
                       </div>
                       <ProgressBar percent={total ? Math.round((w.done / total) * 100) : 0} label={`${w.user.name} completion`} />
                       <div className="muted">

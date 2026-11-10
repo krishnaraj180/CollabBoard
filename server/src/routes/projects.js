@@ -6,6 +6,7 @@ const router = express.Router();
 
 router.get("/:id", projects.getBoard);
 router.patch("/:id", validate(projects.projectUpdateSchema), projects.updateProject);
+router.post("/:id/workflow", validate(projects.workflowTransitionSchema), projects.transitionWorkflow);
 router.delete("/:id", projects.removeProject);
 router.get("/:id/activity", projects.projectActivity);
 router.post("/:id/tasks", validate(projects.taskCreateSchema), projects.createTask);

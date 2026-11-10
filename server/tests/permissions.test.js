@@ -1,6 +1,6 @@
 const request = require("supertest");
 const fs = require("fs");
-const { startDb, stopDb, clearDb, createTestApp, register } = require("./helpers");
+const { startDb, stopDb, clearDb, createTestApp, register, advanceProjectToDevelopment } = require("./helpers");
 const { dest } = require("../src/middleware/upload");
 const Message = require("../src/models/Message");
 
@@ -46,9 +46,14 @@ describe("permissions", () => {
       .send({ email: "member@example.com", role: "member" });
     expect(invited.status).toBe(200);
 
-    const project = await request(app)
+    const memberProject = await request(app)
       .post(`/api/workspaces/${workspaceId}/projects`)
       .set("Cookie", member)
+      .send({ name: "Board" });
+    expect(memberProject.status).toBe(403);
+    const project = await request(app)
+      .post(`/api/workspaces/${workspaceId}/projects`)
+      .set("Cookie", owner)
       .send({ name: "Board" });
     expect(project.status).toBe(201);
 
@@ -56,6 +61,49 @@ describe("permissions", () => {
       .get(`/api/projects/${project.body.project._id}`)
       .set("Cookie", stranger);
     expect(strangerBoard.status).toBe(403);
+  });
+
+  test("project access is limited to assigned people and the current approval role", async () => {
+    const ownerRes = await register(app, { email: "owner@example.com", name: "Owner" });
+    const memberRes = await register(app, { email: "member@example.com", name: "Member" });
+    const mdRes = await register(app, { email: "md@example.com", name: "Managing Director" });
+    const ctoRes = await register(app, { email: "cto@example.com", name: "CTO" });
+    const owner = ownerRes.headers["set-cookie"][0];
+    const member = memberRes.headers["set-cookie"][0];
+    const md = mdRes.headers["set-cookie"][0];
+    const cto = ctoRes.headers["set-cookie"][0];
+
+    const ws = await request(app).post("/api/workspaces").set("Cookie", owner).send({ name: "Private projects" });
+    const workspaceId = ws.body.workspace._id;
+    await request(app).post(`/api/workspaces/${workspaceId}/invites`).set("Cookie", owner)
+      .send({ email: "member@example.com", role: "member" });
+    await request(app).post(`/api/workspaces/${workspaceId}/invites`).set("Cookie", owner)
+      .send({ email: "md@example.com", role: "managing_director" });
+    await request(app).post(`/api/workspaces/${workspaceId}/invites`).set("Cookie", owner)
+      .send({ email: "cto@example.com", role: "cto" });
+    const created = await request(app)
+      .post(`/api/workspaces/${workspaceId}/projects`)
+      .set("Cookie", owner)
+      .send({ name: "Restricted project" });
+    const projectId = created.body.project._id;
+
+    expect((await request(app).get(`/api/projects/${projectId}`).set("Cookie", md)).status).toBe(200);
+    expect((await request(app).get(`/api/projects/${projectId}`).set("Cookie", cto)).status).toBe(403);
+    expect((await request(app).get(`/api/projects/${projectId}`).set("Cookie", member)).status).toBe(403);
+    expect((await request(app).get(`/api/workspaces/${workspaceId}/projects`).set("Cookie", md)).body.projects)
+      .toHaveLength(1);
+    expect((await request(app).get(`/api/workspaces/${workspaceId}/projects`).set("Cookie", cto)).body.projects)
+      .toHaveLength(0);
+    expect((await request(app).get(`/api/workspaces/${workspaceId}/projects`).set("Cookie", member)).body.projects)
+      .toHaveLength(0);
+
+    const approvedBusiness = await request(app)
+      .post(`/api/projects/${projectId}/workflow`)
+      .set("Cookie", md)
+      .send({ action: "approve" });
+    expect(approvedBusiness.status).toBe(200);
+    expect((await request(app).get(`/api/projects/${projectId}`).set("Cookie", md)).status).toBe(403);
+    expect((await request(app).get(`/api/projects/${projectId}`).set("Cookie", cto)).status).toBe(200);
   });
 
   test("only owners and admins can remove other workspace members", async () => {
@@ -96,9 +144,94 @@ describe("permissions", () => {
     expect(ownerRemovesAdmin.status).toBe(200);
   });
 
+  test("owners and admins manage department assignments and reporting lines", async () => {
+    const ownerRes = await register(app, { email: "owner@example.com", name: "Owner" });
+    const adminRes = await register(app, { email: "admin@example.com", name: "Admin" });
+    const memberRes = await register(app, { email: "employee@example.com", name: "Employee" });
+    const owner = ownerRes.headers["set-cookie"][0];
+    const admin = adminRes.headers["set-cookie"][0];
+    const member = memberRes.headers["set-cookie"][0];
+
+    const ws = await request(app).post("/api/workspaces").set("Cookie", owner).send({ name: "Company" });
+    const workspaceId = ws.body.workspace._id;
+    const orgDepartments = ws.body.workspace.organization.departments;
+    expect(orgDepartments.map((department) => department.name)).toEqual(expect.arrayContaining([
+      "Company Leadership",
+      "Technology Leadership",
+      "Development Department",
+      "Frontend Team",
+      "Backend Team",
+      "QA Department",
+      "Design Department",
+      "DevOps Department",
+      "Finance Department",
+      "Marketing Department",
+      "HR Department",
+    ]));
+    expect(orgDepartments.find((department) => department.name === "Backend Team").positions).toEqual([
+      "Node.js Developer",
+      "Java Developer",
+      "Python Developer",
+    ]);
+
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/invites`)
+      .set("Cookie", owner)
+      .send({ email: "admin@example.com", role: "admin" });
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/invites`)
+      .set("Cookie", owner)
+      .send({ email: "employee@example.com", role: "member" });
+
+    const assignment = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/members/${memberRes.body.user._id}/organization`)
+      .set("Cookie", admin)
+      .send({
+        department: "Frontend Team",
+        title: "UI Developer",
+        reportsTo: adminRes.body.user._id,
+      });
+    expect(assignment.status).toBe(200);
+    const assigned = assignment.body.workspace.members.find((item) => item.user._id === memberRes.body.user._id);
+    expect(assigned).toMatchObject({
+      department: "Frontend Team",
+      title: "UI Developer",
+      reportsTo: adminRes.body.user._id,
+    });
+
+    const memberDenied = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/members/${memberRes.body.user._id}/organization`)
+      .set("Cookie", member)
+      .send({ department: "Frontend Team", title: "UI Developer", reportsTo: null });
+    expect(memberDenied.status).toBe(403);
+
+    const cycle = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/members/${adminRes.body.user._id}/organization`)
+      .set("Cookie", admin)
+      .send({ department: "", title: "", reportsTo: memberRes.body.user._id });
+    expect(cycle.status).toBe(400);
+
+    const departments = ws.body.workspace.organization.departments.filter((department) => department.name !== "Frontend Team");
+    const updateStructure = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/organization`)
+      .set("Cookie", admin)
+      .send({ departments });
+    expect(updateStructure.status).toBe(200);
+    const unassigned = updateStructure.body.workspace.members.find((item) => item.user._id === memberRes.body.user._id);
+    expect(unassigned).toMatchObject({ department: "", title: "" });
+
+    const removeManager = await request(app)
+      .delete(`/api/workspaces/${workspaceId}/members/${adminRes.body.user._id}`)
+      .set("Cookie", owner);
+    expect(removeManager.status).toBe(200);
+    const withoutManager = removeManager.body.workspace.members.find((item) => item.user._id === memberRes.body.user._id);
+    expect(withoutManager.reportsTo).toBeNull();
+  });
+
   test("viewers cannot mutate workspace content", async () => {
     const ownerRes = await register(app, { email: "owner@example.com", name: "Owner" });
     const viewerRes = await register(app, { email: "viewer@example.com", name: "Viewer" });
+    const leadRes = await register(app, { email: "lead@example.com", name: "Lead" });
     const owner = ownerRes.headers["set-cookie"][0];
     const viewer = viewerRes.headers["set-cookie"][0];
 
@@ -108,12 +241,21 @@ describe("permissions", () => {
       .post(`/api/workspaces/${workspaceId}/invites`)
       .set("Cookie", owner)
       .send({ email: "viewer@example.com", role: "viewer" });
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/invites`)
+      .set("Cookie", owner)
+      .send({ email: "lead@example.com", role: "team_lead" });
 
     const project = await request(app)
       .post(`/api/workspaces/${workspaceId}/projects`)
       .set("Cookie", owner)
       .send({ name: "Board" });
     const projectId = project.body.project._id;
+    await advanceProjectToDevelopment(app, owner, projectId, [{
+      department: "Frontend Team",
+      teamLeadId: leadRes.body.user._id,
+      memberIds: [leadRes.body.user._id],
+    }]);
     const task = await request(app)
       .post(`/api/projects/${projectId}/tasks`)
       .set("Cookie", owner)

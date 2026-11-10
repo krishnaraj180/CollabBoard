@@ -5,10 +5,11 @@ const Project = require("../models/Project");
 const Task = require("../models/Task");
 const Activity = require("../models/Activity");
 const { PROJECT_STATUSES } = Project;
+const { WORKFLOW_STAGES } = Project;
 const { PRIORITIES } = Task;
 const { AppError, asyncHandler } = require("../utils/errors");
-const { requireMember, isManager, getMemberUserId } = require("../utils/access");
-const { emitToWorkspace } = require("../sockets");
+const { requireMember, isManager, getMemberUserId, canAccessProject } = require("../utils/access");
+const { emitToProjectWorkspace } = require("../sockets");
 const { notifyUsers } = require("../utils/notify");
 const { logActivity } = require("../utils/activity");
 
@@ -44,6 +45,23 @@ const projectUpdateSchema = z.object({
     description: z.string().max(400).optional(),
     status: z.enum(PROJECT_STATUSES).optional(),
     dueDate: dateField,
+    projectManagerId: z.string().nullable().optional(),
+    scope: z.string().max(4000).optional(),
+    budget: z.number().min(0).nullable().optional(),
+    milestones: z.array(z.string().trim().min(1).max(200)).max(30).optional(),
+    departmentAssignments: z.array(z.object({
+      department: z.string().trim().min(1).max(60),
+      teamLeadId: z.string(),
+      memberIds: z.array(z.string()).max(100).default([]),
+    })).max(20).optional(),
+  }),
+});
+
+const workflowTransitionSchema = z.object({
+  params: z.object({ id: z.string() }),
+  body: z.object({
+    action: z.enum(["approve", "submit", "complete", "request_changes", "pass", "fail", "deploy", "release", "launch"]),
+    note: z.string().max(1000).optional().default(""),
   }),
 });
 
@@ -86,6 +104,18 @@ const commentSchema = z.object({
 /* ------------------------------------------------------------------ */
 
 const USER_FIELDS = "name email avatarColor";
+const DEPARTMENT_MEMBER_ROLES = {
+  "Development Department": ["engineering_manager", "development_team_lead", "team_lead", "frontend_developer", "react_developer", "ui_developer", "backend_developer", "nodejs_developer", "java_developer", "python_developer"],
+  "Frontend Team": ["development_team_lead", "team_lead", "frontend_developer", "react_developer", "ui_developer"],
+  "Backend Team": ["development_team_lead", "team_lead", "backend_developer", "nodejs_developer", "java_developer", "python_developer"],
+  "QA Department": ["qa_manager", "qa_team_lead", "qa_engineer"],
+  "Design Department": ["design_manager", "design_team_lead", "ui_ux_designer"],
+  "DevOps Department": ["devops_manager", "devops_team_lead", "devops_engineer"],
+  "Finance Department": ["finance_manager", "accountant", "finance_executive", "finance"],
+  "Marketing Department": ["marketing_manager", "marketing_team_lead", "marketing_executive", "marketing"],
+  "HR Department": ["hr_manager", "hr_executive", "recruiter", "hr_employee"],
+  "Project Management": ["project_manager"],
+};
 
 function assertObjectId(id, label = "id") {
   if (!mongoose.isValidObjectId(id)) throw new AppError(`Invalid ${label}`, 400);
@@ -123,6 +153,9 @@ async function loadProject(req) {
   const project = await Project.findById(req.params.id);
   if (!project) throw new AppError("Project not found", 404);
   const { workspace, membership } = await loadWorkspace(project.workspace, req.user._id);
+  if (!canAccessProject(project, membership, req.user._id)) {
+    throw new AppError("You are not assigned to this project or its current approval step", 403);
+  }
   return { project, workspace, membership };
 }
 
@@ -132,11 +165,251 @@ function requireManager(membership) {
   }
 }
 
+function canManageAssignedProject(project, membership, userId) {
+  return isManager(membership.role) ||
+    (membership.role === "project_manager" && String(project.projectManager?._id || project.projectManager) === String(userId));
+}
+
+async function notifyProjectStakeholders(io, workspace, project, actor, update) {
+  const targets = workspace.members
+    .filter((member) => canAccessProject(project, member, getMemberUserId(member)))
+    .map((member) => getMemberUserId(member));
+  await notifyUsers(io, targets.filter((id) => id !== String(actor._id)), {
+    type: "project.update",
+    title: `${project.name} was updated`,
+    body: `${actor.name} ${update}`,
+    link: `/app/w/${workspace._id}/projects/${project._id}`,
+  });
+}
+
 function requireWritableMember(membership) {
   if (membership.role === "viewer") {
     throw new AppError("Viewers have read-only access", 403);
   }
 }
+
+const TASK_STAGE_ROLES = {
+  design: ["design_manager", "design_team_lead", "ui_ux_designer"],
+  development: [
+    "engineering_manager",
+    "team_lead",
+    "development_team_lead",
+    "frontend_developer",
+    "react_developer",
+    "ui_developer",
+    "backend_developer",
+    "nodejs_developer",
+    "java_developer",
+    "python_developer",
+  ],
+  bug_fixing: [
+    "engineering_manager",
+    "team_lead",
+    "development_team_lead",
+    "frontend_developer",
+    "react_developer",
+    "ui_developer",
+    "backend_developer",
+    "nodejs_developer",
+    "java_developer",
+    "python_developer",
+  ],
+};
+
+function isAssignedToDepartments(project, userId, departments) {
+  const expected = new Set(departments.map((department) => department.toLowerCase()));
+  return project.departmentAssignments.some((assignment) =>
+    expected.has(assignment.department.toLowerCase()) &&
+    (String(assignment.teamLead) === String(userId) ||
+      (assignment.members || []).some((memberId) => String(memberId) === String(userId)))
+  );
+}
+
+function requireTaskWorkStage(project, membership, userId) {
+  const roles = TASK_STAGE_ROLES[project.workflowStage];
+  if (!roles) throw new AppError("Task changes are available during design, development, and bug fixing stages", 409);
+  if (["owner", "admin", "project_manager"].includes(membership.role)) return;
+  if (!roles.includes(membership.role)) {
+    throw new AppError(`Your role cannot edit tasks during ${workflowLabels[project.workflowStage]}`, 403);
+  }
+  const departments = project.workflowStage === "design"
+    ? ["Design Department"]
+    : ["Development Department", "Frontend Team", "Backend Team"];
+  if (!isAssignedToDepartments(project, userId, departments)) {
+    throw new AppError("You are not assigned to this project's active department", 403);
+  }
+}
+
+const WORKFLOW_TRANSITIONS = {
+  business_approval: { action: "approve", next: "technical_review", roles: ["managing_director"] },
+  technical_review: { action: "approve", next: "project_setup", roles: ["cto"] },
+  project_setup: { action: "submit", next: "team_assignment", roles: ["project_manager"] },
+  team_assignment: { action: "submit", next: "design", roles: ["project_manager"] },
+  design: { action: "complete", next: "development", departments: ["Design Department"], roles: ["design_manager", "design_team_lead", "ui_ux_designer"] },
+  development: { action: "complete", next: "code_review", departments: ["Development Department", "Frontend Team", "Backend Team"], roles: ["engineering_manager", "team_lead", "development_team_lead", "frontend_developer", "react_developer", "ui_developer", "backend_developer", "nodejs_developer", "java_developer", "python_developer"] },
+  code_review: { action: "approve", next: "qa_testing", departments: ["Development Department"], roles: ["engineering_manager", "team_lead", "development_team_lead"] },
+  qa_testing: { action: "pass", next: "deployment", departments: ["QA Department"], roles: ["qa_manager", "qa_team_lead", "qa_engineer"] },
+  bug_fixing: { action: "complete", next: "code_review", departments: ["Development Department", "Frontend Team", "Backend Team"], roles: ["engineering_manager", "team_lead", "development_team_lead", "frontend_developer", "react_developer", "ui_developer", "backend_developer", "nodejs_developer", "java_developer", "python_developer"] },
+  deployment: { action: "deploy", next: "production_release", departments: ["DevOps Department"], roles: ["devops_manager", "devops_team_lead", "devops_engineer"] },
+  production_release: { action: "release", next: "marketing_launch", departments: ["DevOps Department"], roles: ["devops_manager", "devops_team_lead", "devops_engineer"] },
+  marketing_launch: { action: "launch", next: "finance_review", departments: ["Marketing Department"], roles: ["marketing_manager", "marketing_team_lead", "marketing_executive", "marketing"] },
+  finance_review: { action: "complete", next: "delivery_review", departments: ["Finance Department"], roles: ["finance_manager", "accountant", "finance_executive", "finance"] },
+  delivery_review: { action: "complete", next: "executive_review", roles: ["project_manager"] },
+  executive_review: { action: "complete", next: "completed", roles: ["ceo", "managing_director"] },
+};
+
+const workflowLabels = {
+  business_approval: "MD business approval",
+  technical_review: "CTO technical review",
+  project_setup: "Project scope and planning",
+  team_assignment: "Department and team assignment",
+  design: "Design",
+  development: "Development",
+  code_review: "Code review and integration",
+  qa_testing: "QA testing",
+  bug_fixing: "Bug fixing",
+  deployment: "DevOps deployment",
+  production_release: "Production release",
+  marketing_launch: "Marketing launch",
+  finance_review: "Finance review",
+  delivery_review: "PM delivery review",
+  executive_review: "CEO/MD final review",
+  completed: "Project completed",
+};
+
+function assertWorkflowRole(membership, allowedRoles, project, userId, departments = []) {
+  if (!allowedRoles.includes(membership.role) && membership.role !== "owner") {
+    throw new AppError(`This workflow step requires: ${allowedRoles.join(" or ")}`, 403);
+  }
+  if (membership.role !== "owner" && departments.length && !isAssignedToDepartments(project, userId, departments)) {
+    throw new AppError("You are not assigned to the department responsible for this workflow step", 403);
+  }
+}
+
+const transitionWorkflow = asyncHandler(async (req, res) => {
+  const { project, workspace, membership } = await loadProject(req);
+  const transition = WORKFLOW_TRANSITIONS[project.workflowStage];
+  const stageActions = project.workflowStage === "qa_testing"
+    ? ["pass", "fail"]
+    : project.workflowStage === "code_review"
+      ? ["approve", "request_changes"]
+      : transition
+        ? [transition.action]
+        : [];
+  if (!transition || !stageActions.includes(req.body.action)) {
+    throw new AppError(`Action is not valid during ${workflowLabels[project.workflowStage] || project.workflowStage}`, 409);
+  }
+  assertWorkflowRole(membership, transition.roles, project, req.user._id, transition.departments);
+
+  if (project.workflowStage === "project_setup") {
+    if (!project.scope.trim() || project.budget === null || !project.dueDate || !project.milestones.length) {
+      throw new AppError("Set the scope, budget, timeline, and at least one milestone before submitting", 400);
+    }
+  }
+  if (project.workflowStage === "team_assignment" && !project.departmentAssignments.length) {
+    throw new AppError("Assign at least one department and team lead before submitting", 400);
+  }
+  if (project.workflowStage === "qa_testing" && req.body.action === "fail" && !req.body.note.trim()) {
+    throw new AppError("Describe the QA failure so a bug task can be created", 400);
+  }
+  if (project.workflowStage === "code_review" && req.body.action === "request_changes" && !req.body.note.trim()) {
+    throw new AppError("Describe the changes required", 400);
+  }
+
+  const priorStage = project.workflowStage;
+  const nextStage = priorStage === "qa_testing" && req.body.action === "fail"
+    ? "bug_fixing"
+    : priorStage === "code_review" && req.body.action === "request_changes"
+      ? "development"
+      : transition.next;
+  if (priorStage === "qa_testing" && req.body.action === "fail") {
+    const developmentMembers = project.departmentAssignments
+      .filter((assignment) => ["frontend team", "backend team"].includes(assignment.department.toLowerCase()))
+      .flatMap((assignment) => assignment.members || []);
+    const bug = await Task.create({
+      workspace: project.workspace,
+      project: project._id,
+      title: `QA bug: ${req.body.note.trim().slice(0, 130)}`,
+      description: req.body.note.trim(),
+      labels: ["bug"],
+      assignees: [...new Set(developmentMembers.map(String))],
+      createdBy: req.user._id,
+    });
+    await populateTask(bug);
+    emitToProjectWorkspace(req.app.get("io"), workspace.members, project, "task:updated", {
+      type: "created",
+      projectId: String(project._id),
+      task: bug,
+    });
+    await notifyAssignees(req.app.get("io"), {
+      workspace,
+      project,
+      task: bug,
+      actor: req.user,
+      ids: bug.assignees.map((assignee) => assignee._id),
+      type: "task.assigned",
+      title: "QA created a bug task for your team",
+    });
+    await logActivity(req.app.get("io"), {
+      workspace: workspace._id,
+      project: project._id,
+      projectManager: project.projectManager,
+      projectAssignments: project.departmentAssignments,
+      workflowStage: project.workflowStage,
+      workspaceMembers: workspace.members,
+      task: bug._id,
+      actor: req.user,
+      action: "task.qa_bug_created",
+      summary: `created a QA bug task: “${bug.title}”`,
+    });
+  }
+
+  project.workflowHistory.push({
+    stage: priorStage,
+    action: req.body.action,
+    actor: req.user._id,
+    note: req.body.note.trim(),
+  });
+  project.workflowStage = nextStage;
+  if (nextStage === "completed") {
+    project.status = "completed";
+    project.completedAt = new Date();
+  }
+  await project.save();
+
+  const populated = await project.populate([
+    { path: "projectManager", select: USER_FIELDS },
+    { path: "workflowHistory.actor", select: "name avatarColor" },
+    { path: "departmentAssignments.teamLead", select: USER_FIELDS },
+    { path: "departmentAssignments.members", select: USER_FIELDS },
+  ]);
+  const io = req.app.get("io");
+  emitToProjectWorkspace(io, workspace.members, project, "project:updated", { project: populated });
+  const actionSummary = {
+    approve: "approved",
+    submit: "submitted",
+    complete: "completed",
+    request_changes: "requested changes",
+    pass: "passed QA",
+    fail: "failed QA",
+    deploy: "deployed",
+    release: "released",
+    launch: "launched",
+  }[req.body.action];
+  await logActivity(io, {
+    workspace: workspace._id,
+    project: project._id,
+    projectManager: project.projectManager,
+    projectAssignments: project.departmentAssignments,
+    workflowStage: project.workflowStage,
+    workspaceMembers: workspace.members,
+    actor: req.user,
+    action: "project.workflow",
+    summary: `${workflowLabels[priorStage]} ${actionSummary}; next: ${workflowLabels[nextStage]}`,
+  });
+  await notifyProjectStakeholders(io, workspace, project, req.user, `moved to ${workflowLabels[nextStage]}`);
+  res.json({ project: populated });
+});
 
 function assertAssigneesInWorkspace(workspace, ids) {
   const allowed = new Set(workspace.members.map((m) => getMemberUserId(m)));
@@ -205,43 +478,70 @@ async function statsForProjects(projects) {
   }));
 }
 
+async function findAccessibleProjects(workspaceId, membership, userId) {
+  const projects = await Project.find({ workspace: workspaceId })
+    .populate("projectManager", USER_FIELDS)
+    .sort({ createdAt: -1 });
+  return projects.filter((project) => canAccessProject(project, membership, userId));
+}
+
 /* ------------------------------------------------------------------ */
 /* Projects                                                            */
 /* ------------------------------------------------------------------ */
 
 const list = asyncHandler(async (req, res) => {
-  await loadWorkspace(req.params.workspaceId, req.user._id);
-  const projects = await Project.find({ workspace: req.params.workspaceId }).sort({ createdAt: -1 });
+  const { membership } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  const projects = await findAccessibleProjects(req.params.workspaceId, membership, req.user._id);
   res.json({ projects: await statsForProjects(projects) });
 });
 
 const create = asyncHandler(async (req, res) => {
   const { workspace, membership } = await loadWorkspace(req.params.workspaceId, req.user._id);
   requireWritableMember(membership);
+  if (!["owner", "admin", "project_manager"].includes(membership.role)) {
+    throw new AppError("Only workspace leadership or project managers can create a project", 403);
+  }
+  if (req.body.status === "completed") {
+    throw new AppError("Projects must complete the workflow before being marked complete", 409);
+  }
   const project = await Project.create({
     workspace: workspace._id,
     name: req.body.name,
     description: req.body.description || "",
     status: req.body.status || "active",
     dueDate: parseDate(req.body.dueDate) || undefined,
+    projectManager: membership.role === "project_manager" ? req.user._id : null,
     owner: req.user._id,
     createdBy: req.user._id,
   });
   const io = req.app.get("io");
   const [withStats] = await statsForProjects([project]);
-  emitToWorkspace(io, workspace._id, "project:created", { project: withStats });
+  emitToProjectWorkspace(io, workspace.members, project, "project:created", { project: withStats });
   await logActivity(io, {
     workspace: workspace._id,
     project: project._id,
+    projectManager: project.projectManager,
+    projectAssignments: project.departmentAssignments,
+    workflowStage: project.workflowStage,
+    workspaceMembers: workspace.members,
     actor: req.user,
     action: "project.created",
     summary: `created project “${project.name}”`,
   });
+  if (membership.role === "project_manager") {
+    await notifyProjectStakeholders(io, workspace, project, req.user, "created the project");
+  }
   res.status(201).json({ project: withStats });
 });
 
 const getBoard = asyncHandler(async (req, res) => {
   const { project, membership } = await loadProject(req);
+  await project.populate([
+    { path: "projectManager", select: USER_FIELDS },
+    { path: "workflowHistory.actor", select: "name avatarColor" },
+    { path: "departmentAssignments.teamLead", select: USER_FIELDS },
+    { path: "departmentAssignments.members", select: USER_FIELDS },
+  ]);
   const tasks = await Task.find({ project: project._id })
     .populate("assignees", USER_FIELDS)
     .populate("createdBy", "name")
@@ -252,12 +552,14 @@ const getBoard = asyncHandler(async (req, res) => {
     tasks,
     stats: computeStats(project, tasks),
     myRole: membership.role,
+    canManageProject: canManageAssignedProject(project, membership, req.user._id),
   });
 });
 
 const updateProject = asyncHandler(async (req, res) => {
   const { project, workspace, membership } = await loadProject(req);
-  requireManager(membership);
+  const canManageProject = canManageAssignedProject(project, membership, req.user._id);
+  if (!canManageProject) requireManager(membership);
   const io = req.app.get("io");
   const previousStatus = project.status;
   const changes = [];
@@ -266,40 +568,106 @@ const updateProject = asyncHandler(async (req, res) => {
     project.name = req.body.name;
     changes.push("renamed");
   }
-  if (req.body.description !== undefined) project.description = req.body.description;
+  if (req.body.description !== undefined && req.body.description !== project.description) {
+    project.description = req.body.description;
+    changes.push("updated the description");
+  }
   if (req.body.dueDate !== undefined) {
-    project.dueDate = parseDate(req.body.dueDate) || undefined;
-    changes.push("changed the due date");
+    const dueDate = parseDate(req.body.dueDate) || undefined;
+    if (String(dueDate || "") !== String(project.dueDate || "")) {
+      project.dueDate = dueDate;
+      changes.push("changed the due date");
+    }
   }
   if (req.body.status !== undefined && req.body.status !== previousStatus) {
+    if (req.body.status === "completed" && project.workflowStage !== "completed") {
+      throw new AppError("Complete the required workflow reviews before completing this project", 409);
+    }
     project.status = req.body.status;
     project.completedAt = req.body.status === "completed" ? new Date() : undefined;
     changes.push(`set status to ${req.body.status.replace("_", " ")}`);
   }
+  if (req.body.projectManagerId !== undefined) {
+    requireManager(membership);
+    if (req.body.projectManagerId !== null) {
+      assertObjectId(req.body.projectManagerId, "project manager id");
+      const selectedManager = workspace.members.find((member) =>
+        getMemberUserId(member) === req.body.projectManagerId && member.role === "project_manager"
+      );
+      if (!selectedManager) throw new AppError("Project managers must have the project manager workspace role", 400);
+    }
+    const nextManagerId = req.body.projectManagerId;
+    if (String(project.projectManager?._id || project.projectManager || "") !== String(nextManagerId || "")) {
+      project.projectManager = nextManagerId;
+      changes.push(nextManagerId ? "assigned a project manager" : "removed the project manager");
+    }
+  }
+  if (["scope", "budget", "milestones"].some((key) => req.body[key] !== undefined)) {
+    if (project.workflowStage !== "project_setup" ||
+      (membership.role !== "project_manager" && membership.role !== "owner")) {
+      throw new AppError("Only the assigned project manager can edit project planning details during project setup", 403);
+    }
+    if (req.body.scope !== undefined) project.scope = req.body.scope;
+    if (req.body.budget !== undefined) project.budget = req.body.budget;
+    if (req.body.milestones !== undefined) project.milestones = req.body.milestones;
+  }
+  if (req.body.departmentAssignments !== undefined) {
+    if (project.workflowStage !== "team_assignment" ||
+      (membership.role !== "project_manager" && membership.role !== "owner")) {
+      throw new AppError("Only the assigned project manager can assign teams during the team assignment stage", 403);
+    }
+    const workspaceMembers = new Map(workspace.members.map((member) => [getMemberUserId(member), member]));
+    project.departmentAssignments = req.body.departmentAssignments.map((assignment) => {
+      const { department, teamLeadId, memberIds } = assignment;
+      if (!workspace.organization.departments.some((item) => item.name === department)) {
+        throw new AppError(`Unknown department: ${department}`, 400);
+      }
+      const lead = workspaceMembers.get(teamLeadId);
+      const departmentLeadRoles = {
+        "Development Department": ["engineering_manager", "development_team_lead"],
+        "Frontend Team": ["development_team_lead", "team_lead"],
+        "Backend Team": ["development_team_lead", "team_lead"],
+        "QA Department": ["qa_manager", "qa_team_lead"],
+        "Design Department": ["design_manager", "design_team_lead"],
+        "HR Department": ["hr_manager"],
+        "DevOps Department": ["devops_manager", "devops_team_lead"],
+        "Marketing Department": ["marketing_manager", "marketing"],
+        "Finance Department": ["finance_manager", "finance"],
+        "Project Management": ["project_manager"],
+      };
+      const allowedLeadRoles = departmentLeadRoles[department] || [];
+      if (!lead || !allowedLeadRoles.includes(lead.role)) {
+        throw new AppError(`Choose a team lead with the ${department} role`, 400);
+      }
+      const members = [...new Set(memberIds)];
+      if (members.some((id) => !workspaceMembers.has(id))) {
+        throw new AppError("Assigned team members must belong to this workspace", 400);
+      }
+      if (members.some((id) => !DEPARTMENT_MEMBER_ROLES[department]?.includes(workspaceMembers.get(id).role))) {
+        throw new AppError(`Team members assigned to ${department} must have a matching department role`, 400);
+      }
+      return { department, teamLead: teamLeadId, members };
+    });
+  }
   await project.save();
 
+  await project.populate("projectManager", USER_FIELDS);
   const [withStats] = await statsForProjects([project]);
-  emitToWorkspace(io, workspace._id, "project:updated", { project: withStats });
+  emitToProjectWorkspace(io, workspace.members, project, "project:updated", { project: withStats });
 
   if (changes.length) {
     await logActivity(io, {
       workspace: workspace._id,
       project: project._id,
+      projectManager: project.projectManager,
+      projectAssignments: project.departmentAssignments,
+      workflowStage: project.workflowStage,
+      workspaceMembers: workspace.members,
       actor: req.user,
       action: "project.updated",
       summary: `${changes.join(", ")} on “${project.name}”`,
     });
-  }
-  if (project.status !== previousStatus) {
-    const others = workspace.members.map((m) => getMemberUserId(m)).filter((id) => id !== String(req.user._id));
-    if (others.length) {
-      await notifyUsers(io, others, {
-        type: "project.status",
-        title: `${project.name} is now ${project.status.replace("_", " ")}`,
-        body: `${req.user.name} updated the project status`,
-        link: `/app/w/${workspace._id}/projects/${project._id}`,
-      });
-    }
+    await notifyProjectStakeholders(io, workspace, project, req.user, changes.join(", "));
   }
   res.json({ project: withStats });
 });
@@ -311,9 +679,13 @@ const removeProject = asyncHandler(async (req, res) => {
   await Task.deleteMany({ project: project._id });
   await Activity.deleteMany({ project: project._id });
   await project.deleteOne();
-  emitToWorkspace(io, workspace._id, "project:deleted", { projectId: String(project._id) });
+  emitToProjectWorkspace(io, workspace.members, project, "project:deleted", { projectId: String(project._id) });
   await logActivity(io, {
     workspace: workspace._id,
+    projectManager: project.projectManager,
+    projectAssignments: project.departmentAssignments,
+    workflowStage: project.workflowStage,
+    workspaceMembers: workspace.members,
     actor: req.user,
     action: "project.deleted",
     summary: `deleted project “${project.name}”`,
@@ -339,6 +711,7 @@ function notifyAssignees(io, { workspace, project, task, actor, ids, title, type
 const createTask = asyncHandler(async (req, res) => {
   const { project, workspace, membership } = await loadProject(req);
   requireWritableMember(membership);
+  requireTaskWorkStage(project, membership, req.user._id);
   const io = req.app.get("io");
   const columnId = req.body.columnId || project.columns[0]?.id || "todo";
   if (!project.columns.some((c) => c.id === columnId)) {
@@ -363,7 +736,7 @@ const createTask = asyncHandler(async (req, res) => {
     createdBy: req.user._id,
   });
   await populateTask(task);
-  emitToWorkspace(io, project.workspace, "task:updated", {
+  emitToProjectWorkspace(io, workspace.members, project, "task:updated", {
     type: "created",
     projectId: String(project._id),
     task,
@@ -371,11 +744,16 @@ const createTask = asyncHandler(async (req, res) => {
   await logActivity(io, {
     workspace: workspace._id,
     project: project._id,
+    projectManager: project.projectManager,
+    projectAssignments: project.departmentAssignments,
+    workflowStage: project.workflowStage,
+    workspaceMembers: workspace.members,
     task: task._id,
     actor: req.user,
     action: "task.created",
     summary: `added “${task.title}” to ${project.name}`,
   });
+  await notifyProjectStakeholders(io, workspace, project, req.user, `added a task to ${project.name}`);
   await notifyAssignees(io, {
     workspace,
     project,
@@ -391,6 +769,7 @@ const createTask = asyncHandler(async (req, res) => {
 const updateTask = asyncHandler(async (req, res) => {
   const { project, workspace, membership } = await loadProject(req);
   requireWritableMember(membership);
+  requireTaskWorkStage(project, membership, req.user._id);
   assertObjectId(req.params.taskId, "task id");
   const io = req.app.get("io");
   const task = await Task.findOne({ _id: req.params.taskId, project: project._id });
@@ -428,13 +807,22 @@ const updateTask = asyncHandler(async (req, res) => {
 
   await task.save();
   await populateTask(task);
-  emitToWorkspace(io, project.workspace, "task:updated", {
+  emitToProjectWorkspace(io, workspace.members, project, "task:updated", {
     type: "updated",
     projectId: String(project._id),
     task,
   });
 
-  const base = { workspace: workspace._id, project: project._id, task: task._id, actor: req.user };
+  const base = {
+    workspace: workspace._id,
+    project: project._id,
+    task: task._id,
+    actor: req.user,
+    projectManager: project.projectManager,
+    projectAssignments: project.departmentAssignments,
+    workflowStage: project.workflowStage,
+    workspaceMembers: workspace.members,
+  };
   const columnTitle = (id) => project.columns.find((c) => c.id === id)?.title || id;
   if (task.columnId !== before.columnId) {
     await logActivity(io, {
@@ -456,6 +844,7 @@ const updateTask = asyncHandler(async (req, res) => {
         title: `${req.user.name} completed a task`,
       });
     }
+    await notifyProjectStakeholders(io, workspace, project, req.user, `moved “${task.title}” to ${columnTitle(task.columnId)}`);
   } else if (task.priority !== before.priority) {
     await logActivity(io, {
       ...base,
@@ -483,16 +872,17 @@ const updateTask = asyncHandler(async (req, res) => {
 const removeTask = asyncHandler(async (req, res) => {
   const { project, workspace, membership } = await loadProject(req);
   requireWritableMember(membership);
+  requireTaskWorkStage(project, membership, req.user._id);
   assertObjectId(req.params.taskId, "task id");
   const existing = await Task.findOne({ _id: req.params.taskId, project: project._id });
   if (!existing) throw new AppError("Task not found", 404);
   const isCreator = String(existing.createdBy) === String(req.user._id);
-  if (!isCreator && !isManager(membership.role)) {
-    throw new AppError("Only the creator or a workspace admin can delete this task", 403);
+  if (!isCreator && !canManageAssignedProject(project, membership, req.user._id)) {
+    throw new AppError("Only the creator, assigned project manager, or workspace admin can delete this task", 403);
   }
   await existing.deleteOne();
   const io = req.app.get("io");
-  emitToWorkspace(io, project.workspace, "task:updated", {
+  emitToProjectWorkspace(io, workspace.members, project, "task:updated", {
     type: "deleted",
     projectId: String(project._id),
     taskId: String(existing._id),
@@ -500,10 +890,15 @@ const removeTask = asyncHandler(async (req, res) => {
   await logActivity(io, {
     workspace: workspace._id,
     project: project._id,
+    projectManager: project.projectManager,
+    projectAssignments: project.departmentAssignments,
+    workflowStage: project.workflowStage,
+    workspaceMembers: workspace.members,
     actor: req.user,
     action: "task.deleted",
     summary: `deleted “${existing.title}”`,
   });
+  await notifyProjectStakeholders(io, workspace, project, req.user, `deleted task “${existing.title}”`);
   res.json({ ok: true });
 });
 
@@ -517,7 +912,7 @@ const addComment = asyncHandler(async (req, res) => {
   task.comments.push({ author: req.user._id, body: req.body.body });
   await task.save();
   await populateTask(task);
-  emitToWorkspace(io, project.workspace, "task:updated", {
+  emitToProjectWorkspace(io, workspace.members, project, "task:updated", {
     type: "updated",
     projectId: String(project._id),
     task,
@@ -525,6 +920,10 @@ const addComment = asyncHandler(async (req, res) => {
   await logActivity(io, {
     workspace: workspace._id,
     project: project._id,
+    projectManager: project.projectManager,
+    projectAssignments: project.departmentAssignments,
+    workflowStage: project.workflowStage,
+    workspaceMembers: workspace.members,
     task: task._id,
     actor: req.user,
     action: "task.commented",
@@ -543,20 +942,20 @@ const addComment = asyncHandler(async (req, res) => {
 });
 
 const removeComment = asyncHandler(async (req, res) => {
-  const { project, membership } = await loadProject(req);
+  const { project, workspace, membership } = await loadProject(req);
   requireWritableMember(membership);
   assertObjectId(req.params.taskId, "task id");
   const task = await Task.findOne({ _id: req.params.taskId, project: project._id });
   if (!task) throw new AppError("Task not found", 404);
   const comment = task.comments.id(req.params.commentId);
   if (!comment) throw new AppError("Comment not found", 404);
-  if (String(comment.author) !== String(req.user._id) && !isManager(membership.role)) {
+  if (String(comment.author) !== String(req.user._id) && !canManageAssignedProject(project, membership, req.user._id)) {
     throw new AppError("You can only delete your own comments", 403);
   }
   comment.deleteOne();
   await task.save();
   await populateTask(task);
-  emitToWorkspace(req.app.get("io"), project.workspace, "task:updated", {
+  emitToProjectWorkspace(req.app.get("io"), workspace.members, project, "task:updated", {
     type: "updated",
     projectId: String(project._id),
     task,
@@ -579,7 +978,14 @@ const projectActivity = asyncHandler(async (req, res) => {
 
 const myTasks = asyncHandler(async (req, res) => {
   const { workspace } = await loadWorkspace(req.params.workspaceId, req.user._id);
-  const tasks = await Task.find({ workspace: workspace._id, assignees: req.user._id })
+  const membership = workspace.members.find((member) => getMemberUserId(member) === String(req.user._id));
+  const accessibleProjects = await findAccessibleProjects(workspace._id, membership, req.user._id);
+  const taskQuery = {
+    workspace: workspace._id,
+    project: { $in: accessibleProjects.map((project) => project._id) },
+    assignees: req.user._id,
+  };
+  const tasks = await Task.find(taskQuery)
     .populate("project", "name columns status")
     .populate("assignees", USER_FIELDS)
     .sort({ dueDate: 1, createdAt: -1 });
@@ -600,10 +1006,14 @@ const myTasks = asyncHandler(async (req, res) => {
 
 const dashboard = asyncHandler(async (req, res) => {
   const { workspace, membership } = await loadWorkspace(req.params.workspaceId, req.user._id);
-  const [projects, tasks, activity] = await Promise.all([
-    Project.find({ workspace: workspace._id }).sort({ createdAt: -1 }),
-    Task.find({ workspace: workspace._id }).select("project columnId dueDate assignees priority"),
-    Activity.find({ workspace: workspace._id })
+  const projects = await findAccessibleProjects(workspace._id, membership, req.user._id);
+  const projectIds = projects.map((project) => project._id);
+  const [tasks, activity] = await Promise.all([
+    Task.find({ project: { $in: projectIds } }).select("project columnId dueDate assignees priority"),
+    Activity.find({
+      workspace: workspace._id,
+      project: { $in: projectIds },
+    })
       .sort({ createdAt: -1 })
       .limit(15)
       .populate("actor", "name avatarColor"),
@@ -651,8 +1061,13 @@ const dashboard = asyncHandler(async (req, res) => {
 });
 
 const workspaceActivity = asyncHandler(async (req, res) => {
-  const { workspace } = await loadWorkspace(req.params.workspaceId, req.user._id);
-  const items = await Activity.find({ workspace: workspace._id })
+  const { workspace, membership } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  const projects = await findAccessibleProjects(workspace._id, membership, req.user._id);
+  const query = {
+    workspace: workspace._id,
+    project: { $in: projects.map((project) => project._id) },
+  };
+  const items = await Activity.find(query)
     .sort({ createdAt: -1 })
     .limit(50)
     .populate("actor", "name avatarColor");
@@ -662,6 +1077,7 @@ const workspaceActivity = asyncHandler(async (req, res) => {
 module.exports = {
   createSchema,
   projectUpdateSchema,
+  workflowTransitionSchema,
   taskCreateSchema,
   taskUpdateSchema,
   commentSchema,
@@ -669,6 +1085,7 @@ module.exports = {
   create,
   getBoard,
   updateProject,
+  transitionWorkflow,
   removeProject,
   createTask,
   updateTask,
