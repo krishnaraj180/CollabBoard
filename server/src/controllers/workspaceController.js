@@ -5,8 +5,11 @@ const User = require("../models/User");
 const { AppError, asyncHandler } = require("../utils/errors");
 const { requireMember, requireRole, getMemberUserId } = require("../utils/access");
 const Task = require("../models/Task");
+const Project = require("../models/Project");
 const { notifyUsers } = require("../utils/notify");
 const { logActivity } = require("../utils/activity");
+const { DEFAULT_DEPARTMENTS } = require("../utils/organization");
+const { ASSIGNABLE_WORKSPACE_ROLES } = require("../utils/access");
 
 const createSchema = z.object({
   body: z.object({
@@ -27,13 +30,39 @@ const inviteSchema = z.object({
   params: z.object({ id: z.string() }),
   body: z.object({
     email: z.string().email(),
-    role: z.enum(["admin", "member", "viewer"]).optional().default("member"),
+    role: z.enum(ASSIGNABLE_WORKSPACE_ROLES).optional().default("member"),
   }),
 });
 
 const roleSchema = z.object({
   params: z.object({ id: z.string(), userId: z.string() }),
-  body: z.object({ role: z.enum(["admin", "member", "viewer"]) }),
+  body: z.object({ role: z.enum(ASSIGNABLE_WORKSPACE_ROLES) }),
+});
+
+const organizationMemberSchema = z.object({
+  params: z.object({ id: z.string(), userId: z.string() }),
+  body: z.object({
+    department: z.string().max(60).default(""),
+    title: z.string().max(60).default(""),
+    reportsTo: z.string().nullable().optional().default(null),
+  }).refine(
+    ({ department, title }) => (!department && !title) || (department && title),
+    { message: "Choose both a department and a position, or clear both" }
+  ),
+});
+
+const organizationSchema = z.object({
+  params: z.object({ id: z.string() }),
+  body: z.object({
+    departments: z.array(z.object({
+      name: z.string().trim().min(1).max(60),
+      positions: z.array(z.string().trim().min(1).max(60)).max(30),
+    })).min(1).max(20),
+  }).refine(({ departments }) => {
+    const names = departments.map(({ name }) => name.toLowerCase());
+    return new Set(names).size === names.length &&
+      departments.every(({ positions }) => new Set(positions.map((position) => position.toLowerCase())).size === positions.length);
+  }, { message: "Department and position names must be unique" }),
 });
 
 async function ensureGeneralChannel(workspace, userId) {
@@ -61,6 +90,7 @@ const create = asyncHandler(async (req, res) => {
     name: req.body.name,
     description: req.body.description || "",
     members: [{ user: req.user._id, role: "owner" }],
+    organization: { version: 2, departments: DEFAULT_DEPARTMENTS },
   });
   await ensureGeneralChannel(workspace, req.user._id);
   const populated = await workspace.populate("members.user", "name email avatarColor lastSeenAt");
@@ -74,6 +104,26 @@ const getOne = asyncHandler(async (req, res) => {
   );
   if (!workspace) throw new AppError("Workspace not found", 404);
   requireMember(workspace, req.user._id);
+  if ((workspace.organization?.version || 1) < 2) {
+    const existingDepartments = new Map(
+      (workspace.organization?.departments || []).map((department) => [department.name, department])
+    );
+    const defaultDepartments = DEFAULT_DEPARTMENTS.map((department) => {
+      const existing = existingDepartments.get(department.name);
+      existingDepartments.delete(department.name);
+      return {
+        name: department.name,
+        positions: [...new Set([...(existing?.positions || []), ...department.positions])],
+      };
+    });
+    const mergedDepartments = [...defaultDepartments, ...existingDepartments.values()].map((department) => ({
+      name: department.name,
+      positions: [...department.positions],
+    }));
+    workspace.organization.departments = mergedDepartments;
+    workspace.organization.version = 2;
+    await workspace.save();
+  }
   res.json({ workspace });
 });
 
@@ -133,8 +183,15 @@ const updateRole = asyncHandler(async (req, res) => {
   const member = workspace.members.find((m) => getMemberUserId(m) === req.params.userId);
   if (!member) throw new AppError("Member not found", 404);
   if (member.role === "owner") throw new AppError("Cannot change the owner role", 400);
+  const wasProjectManager = member.role === "project_manager";
   member.role = req.body.role;
   await workspace.save();
+  if (wasProjectManager && member.role !== "project_manager") {
+    await Project.updateMany(
+      { workspace: workspace._id, projectManager: req.params.userId },
+      { $set: { projectManager: null } }
+    );
+  }
   const changed = await User.findById(req.params.userId).select("name");
   await logActivity(req.app.get("io"), {
     workspace: workspace._id,
@@ -152,6 +209,64 @@ const updateRole = asyncHandler(async (req, res) => {
   res.json({ workspace: populated });
 });
 
+const updateOrganizationMember = asyncHandler(async (req, res) => {
+  const workspace = await Workspace.findById(req.params.id);
+  if (!workspace) throw new AppError("Workspace not found", 404);
+  requireRole(workspace, req.user._id, ["owner", "admin"]);
+  const member = workspace.members.find((m) => getMemberUserId(m) === req.params.userId);
+  if (!member) throw new AppError("Member not found", 404);
+
+  const { department, title, reportsTo } = req.body;
+  if (department && !workspace.organization.departments.some((item) => item.name === department && item.positions.includes(title))) {
+    throw new AppError("Choose a position from the selected department", 400);
+  }
+  if (reportsTo) {
+    if (reportsTo === req.params.userId || !workspace.members.some((item) => getMemberUserId(item) === reportsTo)) {
+      throw new AppError("Choose another member of this workspace as the manager", 400);
+    }
+
+    let manager = workspace.members.find((item) => getMemberUserId(item) === reportsTo);
+    const visited = new Set([req.params.userId]);
+    while (manager?.reportsTo) {
+      const managerId = getMemberUserId(manager);
+      if (visited.has(managerId)) {
+        throw new AppError("Reporting lines cannot contain a cycle", 400);
+      }
+      visited.add(managerId);
+      manager = workspace.members.find((item) => getMemberUserId(item) === String(manager.reportsTo));
+    }
+    if (manager && visited.has(getMemberUserId(manager))) {
+      throw new AppError("Reporting lines cannot contain a cycle", 400);
+    }
+  }
+
+  member.department = department;
+  member.title = title;
+  member.reportsTo = reportsTo || null;
+  await workspace.save();
+  const populated = await workspace.populate("members.user", "name email avatarColor lastSeenAt");
+  res.json({ workspace: populated });
+});
+
+const updateOrganization = asyncHandler(async (req, res) => {
+  const workspace = await Workspace.findById(req.params.id);
+  if (!workspace) throw new AppError("Workspace not found", 404);
+  requireRole(workspace, req.user._id, ["owner", "admin"]);
+
+  workspace.organization.departments = req.body.departments;
+  workspace.organization.version = 2;
+  const departments = new Map(req.body.departments.map((item) => [item.name, new Set(item.positions)]));
+  for (const member of workspace.members) {
+    if (member.department && !departments.get(member.department)?.has(member.title)) {
+      member.department = "";
+      member.title = "";
+    }
+  }
+  await workspace.save();
+  const populated = await workspace.populate("members.user", "name email avatarColor lastSeenAt");
+  res.json({ workspace: populated });
+});
+
 const removeMember = asyncHandler(async (req, res) => {
   const workspace = await Workspace.findById(req.params.id);
   if (!workspace) throw new AppError("Workspace not found", 404);
@@ -165,8 +280,19 @@ const removeMember = asyncHandler(async (req, res) => {
   if (actor.role === "admin" && target.role === "admin") {
     throw new AppError("Admins cannot remove other admins", 403);
   }
-  workspace.members = workspace.members.filter((m) => getMemberUserId(m) !== targetId);
+  workspace.members = workspace.members
+    .filter((m) => getMemberUserId(m) !== targetId)
+    .map((m) => {
+      if (String(m.reportsTo) === targetId) m.reportsTo = null;
+      return m;
+    });
   await workspace.save();
+  if (target.role === "project_manager") {
+    await Project.updateMany(
+      { workspace: workspace._id, projectManager: targetId },
+      { $set: { projectManager: null } }
+    );
+  }
   await Channel.updateMany({ workspace: workspace._id }, { $pull: { members: targetId } });
   await Task.updateMany({ workspace: workspace._id }, { $pull: { assignees: targetId } });
   const removed = await User.findById(targetId).select("name");
@@ -185,11 +311,15 @@ module.exports = {
   updateSchema,
   inviteSchema,
   roleSchema,
+  organizationMemberSchema,
+  organizationSchema,
   list,
   create,
   getOne,
   update,
   invite,
   updateRole,
+  updateOrganizationMember,
+  updateOrganization,
   removeMember,
 };

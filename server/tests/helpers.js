@@ -45,4 +45,36 @@ async function register(app, overrides = {}) {
   return res;
 }
 
-module.exports = { startDb, stopDb, clearDb, createTestApp, register };
+async function advanceProjectToDevelopment(app, cookie, projectId, assignments) {
+  const transition = (action) =>
+    request(app).post(`/api/projects/${projectId}/workflow`).set("Cookie", cookie).send({ action });
+  const business = await transition("approve");
+  if (business.status !== 200) throw new Error(`Business approval setup failed: ${business.status} ${business.body.message || ""}`);
+  const technical = await transition("approve");
+  if (technical.status !== 200) throw new Error(`Technical review setup failed: ${technical.status} ${technical.body.message || ""}`);
+  const plan = await request(app)
+    .patch(`/api/projects/${projectId}`)
+    .set("Cookie", cookie)
+    .send({
+      scope: "Test project scope",
+      budget: 1000,
+      dueDate: new Date(Date.now() + 86400000).toISOString(),
+      milestones: ["Plan", "Build"],
+    });
+  if (plan.status !== 200) throw new Error(`Project planning setup failed: ${plan.status} ${plan.body.message || ""}`);
+  const planSubmitted = await transition("submit");
+  if (planSubmitted.status !== 200) throw new Error(`Project plan submission failed: ${planSubmitted.status} ${planSubmitted.body.message || ""}`);
+  const teamPlan = await request(app)
+    .patch(`/api/projects/${projectId}`)
+    .set("Cookie", cookie)
+    .send({
+      departmentAssignments: assignments || [],
+    });
+  if (teamPlan.status !== 200) throw new Error(`Team assignment setup failed: ${teamPlan.status} ${teamPlan.body.message || ""}`);
+  const teamSubmitted = await transition("submit");
+  if (teamSubmitted.status !== 200) throw new Error(`Team assignment submission failed: ${teamSubmitted.status} ${teamSubmitted.body.message || ""}`);
+  const designDone = await transition("complete");
+  if (designDone.status !== 200) throw new Error(`Design setup failed: ${designDone.status} ${designDone.body.message || ""}`);
+}
+
+module.exports = { startDb, stopDb, clearDb, createTestApp, register, advanceProjectToDevelopment };

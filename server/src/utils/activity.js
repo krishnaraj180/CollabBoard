@@ -1,8 +1,19 @@
 const Activity = require("../models/Activity");
-const { emitToWorkspace } = require("../sockets");
+const { emitToWorkspace, emitToProjectWorkspace } = require("../sockets");
 
-/** Record something that happened and push it to everyone in the workspace. */
-async function logActivity(io, { workspace, project, task, actor, action, summary }) {
+/** Record an activity and scope project events to the assigned project manager. */
+async function logActivity(io, {
+  workspace,
+  project,
+  task,
+  actor,
+  action,
+  summary,
+  projectManager,
+  projectAssignments,
+  workflowStage,
+  workspaceMembers,
+}) {
   const doc = await Activity.create({ workspace, project, task, actor: actor._id || actor, action, summary });
   const payload = {
     _id: doc._id,
@@ -14,7 +25,17 @@ async function logActivity(io, { workspace, project, task, actor, action, summar
     actor: { _id: actor._id, name: actor.name, avatarColor: actor.avatarColor },
     createdAt: doc.createdAt,
   };
-  if (io) emitToWorkspace(io, workspace, "activity:new", payload);
+  if (io) {
+    if (workspaceMembers) {
+      emitToProjectWorkspace(io, workspaceMembers, {
+        projectManager,
+        departmentAssignments: projectAssignments,
+        workflowStage,
+      }, "activity:new", payload);
+    } else {
+      emitToWorkspace(io, workspace, "activity:new", payload);
+    }
+  }
   return payload;
 }
 

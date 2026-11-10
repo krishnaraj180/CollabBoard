@@ -4,7 +4,7 @@ const Workspace = require("../models/Workspace");
 const Channel = require("../models/Channel");
 const { env } = require("../config/env");
 const { COOKIE } = require("../utils/tokens");
-const { memberOf } = require("../utils/access");
+const { memberOf, getMemberUserId, canAccessProject } = require("../utils/access");
 
 const socketsByUser = new Map();
 
@@ -153,6 +153,14 @@ function emitToWorkspace(io, workspaceId, event, payload) {
   io.to(`workspace:${workspaceId}`).emit(event, payload);
 }
 
+function emitToProjectWorkspace(io, members, project, event, payload) {
+  members.forEach((member) => {
+    const userId = getMemberUserId(member);
+    if (!canAccessProject(project, member, userId)) return;
+    emitToUser(io, userId, event, payload);
+  });
+}
+
 function emitToChannel(io, channelId, event, payload) {
   io.to(`channel:${channelId}`).emit(event, payload);
 }
@@ -164,6 +172,7 @@ function emitToUser(io, userId, event, payload) {
 module.exports = {
   attachSockets,
   emitToWorkspace,
+  emitToProjectWorkspace,
   emitToChannel,
   emitToUser,
   isOnline,

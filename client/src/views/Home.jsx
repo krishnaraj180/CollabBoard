@@ -7,6 +7,7 @@ import AppShell from "../components/AppShell";
 import { Avatar } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
 import { useNav } from "../context/NavContext";
+import { roleLabel } from "../lib/format";
 
 export default function Home() {
   const { user } = useAuth();
@@ -68,7 +69,7 @@ export default function Home() {
             <Link className="card project-card" key={ws._id} href={`/app/w/${ws._id}`}>
               <div className="card-top">
                 <h3>{ws.name}</h3>
-                {mine && <span className={`role-pill ${mine.role}`}>{mine.role}</span>}
+                {mine && <span className={`role-pill ${mine.role}`}>{roleLabel(mine.role)}</span>}
               </div>
               <p className="muted">{ws.description || "Team workspace"}</p>
               <div className="card-foot">

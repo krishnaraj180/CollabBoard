@@ -1,5 +1,5 @@
 const request = require("supertest");
-const { startDb, stopDb, clearDb, createTestApp, register } = require("./helpers");
+const { startDb, stopDb, clearDb, createTestApp, register, advanceProjectToDevelopment } = require("./helpers");
 
 describe("project management features", () => {
   let app;
@@ -33,12 +33,17 @@ describe("project management features", () => {
     await request(app)
       .post(`/api/workspaces/${workspaceId}/invites`)
       .set("Cookie", owner)
-      .send({ email: "member@example.com" });
+      .send({ email: "member@example.com", role: "team_lead" });
     const p = await request(app)
       .post(`/api/workspaces/${workspaceId}/projects`)
       .set("Cookie", owner)
       .send({ name: "Launch" });
     projectId = p.body.project._id;
+    await advanceProjectToDevelopment(app, owner, projectId, [{
+      department: "Frontend Team",
+      teamLeadId: memberId,
+      memberIds: [memberId],
+    }]);
   });
 
   test("only owners and admins can change project status", async () => {
@@ -51,10 +56,15 @@ describe("project management features", () => {
     const ok = await request(app)
       .patch(`/api/projects/${projectId}`)
       .set("Cookie", owner)
-      .send({ status: "completed" });
+      .send({ status: "on_hold" });
     expect(ok.status).toBe(200);
-    expect(ok.body.project.status).toBe("completed");
-    expect(ok.body.project.completedAt).toBeTruthy();
+    expect(ok.body.project.status).toBe("on_hold");
+
+    const bypass = await request(app)
+      .patch(`/api/projects/${projectId}`)
+      .set("Cookie", owner)
+      .send({ status: "completed" });
+    expect(bypass.status).toBe(409);
 
     const bad = await request(app)
       .patch(`/api/projects/${projectId}`)
@@ -62,6 +72,269 @@ describe("project management features", () => {
       .send({ status: "nonsense" });
     expect(bad.status).toBe(400);
   });
+
+  test("project managers can manage only assigned projects and report progress to workspace executives", async () => {
+    const pmRes = await register(app, { email: "pm@example.com", name: "Project Manager" });
+    const mdRes = await register(app, { email: "md@example.com", name: "Managing Director" });
+    const pm = pmRes.headers["set-cookie"][0];
+    const md = mdRes.headers["set-cookie"][0];
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/invites`)
+      .set("Cookie", owner)
+      .send({ email: "pm@example.com", role: "project_manager" });
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/invites`)
+      .set("Cookie", owner)
+      .send({ email: "md@example.com", role: "admin" });
+
+    const assigned = await request(app)
+      .patch(`/api/projects/${projectId}`)
+      .set("Cookie", owner)
+      .send({ projectManagerId: pmRes.body.user._id });
+    expect(assigned.status).toBe(200);
+    expect(assigned.body.project.projectManager._id).toBe(pmRes.body.user._id);
+
+    const invalidAssignment = await request(app)
+      .patch(`/api/projects/${projectId}`)
+      .set("Cookie", owner)
+      .send({ projectManagerId: memberId });
+    expect(invalidAssignment.status).toBe(400);
+    const memberAssignment = await request(app)
+      .patch(`/api/projects/${projectId}`)
+      .set("Cookie", member)
+      .send({ projectManagerId: pmRes.body.user._id });
+    expect(memberAssignment.status).toBe(403);
+
+    const unassignedProject = await request(app)
+      .post(`/api/workspaces/${workspaceId}/projects`)
+      .set("Cookie", owner)
+      .send({ name: "Unassigned" });
+    const forbiddenBoard = await request(app)
+      .get(`/api/projects/${unassignedProject.body.project._id}`)
+      .set("Cookie", pm);
+    expect(forbiddenBoard.status).toBe(403);
+
+    const projectList = await request(app)
+      .get(`/api/workspaces/${workspaceId}/projects`)
+      .set("Cookie", pm);
+    expect(projectList.body.projects.map((project) => project._id)).toEqual([projectId]);
+
+    const dashboard = await request(app)
+      .get(`/api/workspaces/${workspaceId}/dashboard`)
+      .set("Cookie", pm);
+    expect(dashboard.body.totals.projects).toBe(1);
+
+    const statusUpdate = await request(app)
+      .patch(`/api/projects/${projectId}`)
+      .set("Cookie", pm)
+      .send({ status: "on_hold" });
+    expect(statusUpdate.status).toBe(200);
+
+    const ownerNotifications = await request(app).get("/api/notifications").set("Cookie", owner);
+    const mdNotifications = await request(app).get("/api/notifications").set("Cookie", md);
+    const pmNotifications = await request(app).get("/api/notifications").set("Cookie", pm);
+    expect(ownerNotifications.body.notifications.some((notification) => notification.type === "project.update")).toBe(true);
+    expect(mdNotifications.body.notifications.some((notification) => notification.type === "project.update")).toBe(true);
+    expect(pmNotifications.body.notifications.some((notification) => notification.type === "project.update")).toBe(true);
+
+    const deleteDenied = await request(app).delete(`/api/projects/${projectId}`).set("Cookie", pm);
+    expect(deleteDenied.status).toBe(403);
+
+    const createdTask = await request(app)
+      .post(`/api/projects/${projectId}/tasks`)
+      .set("Cookie", owner)
+      .send({ title: "PM can manage assigned project tasks" });
+    const deleteTask = await request(app)
+      .delete(`/api/projects/${projectId}/tasks/${createdTask.body.task._id}`)
+      .set("Cookie", pm);
+    expect(deleteTask.status).toBe(200);
+
+    const demoted = await request(app)
+      .patch(`/api/workspaces/${workspaceId}/members/${pmRes.body.user._id}`)
+      .set("Cookie", owner)
+      .send({ role: "member" });
+    expect(demoted.status).toBe(200);
+    expect(demoted.body.workspace.members.find((item) => item.user._id === pmRes.body.user._id).role).toBe("member");
+    const unassignedAfterDemotion = await request(app)
+      .get(`/api/workspaces/${workspaceId}/projects`)
+      .set("Cookie", owner);
+    expect(unassignedAfterDemotion.body.projects.find((item) => item._id === projectId).projectManager).toBeNull();
+    const projectAfterDemotion = await request(app).get(`/api/projects/${projectId}`).set("Cookie", pm);
+    expect(projectAfterDemotion.status).toBe(403);
+  });
+
+  test("role-based workflow enforces approvals, QA bug loops, deployment, and executive completion", async () => {
+    const outsiderInvited = await request(app)
+      .post(`/api/workspaces/${workspaceId}/invites`)
+      .set("Cookie", owner)
+      .send({ email: "other@example.com", role: "team_lead" });
+    expect(outsiderInvited.status).toBe(200);
+    const roleUsers = {};
+    for (const [key, role] of [
+      ["md", "managing_director"],
+      ["cto", "cto"],
+      ["pm", "project_manager"],
+      ["engineering", "engineering_manager"],
+      ["design", "design_manager"],
+      ["qa", "qa_manager"],
+      ["devops", "devops_manager"],
+      ["marketing", "marketing_manager"],
+      ["finance", "finance_manager"],
+    ]) {
+      const account = await register(app, { email: `${key}@example.com`, name: key });
+      roleUsers[key] = { cookie: account.headers["set-cookie"][0], userId: account.body.user._id };
+      const invited = await request(app)
+        .post(`/api/workspaces/${workspaceId}/invites`)
+        .set("Cookie", owner)
+        .send({ email: `${key}@example.com`, role });
+      expect(invited.status).toBe(200);
+    }
+
+    const created = await request(app)
+      .post(`/api/workspaces/${workspaceId}/projects`)
+      .set("Cookie", roleUsers.pm.cookie)
+      .send({ name: "Workflow test" });
+    expect(created.status).toBe(201);
+    const workflowProjectId = created.body.project._id;
+    expect(created.body.project.workflowStage).toBe("business_approval");
+
+    const wrongApprover = await request(app)
+      .post(`/api/projects/${workflowProjectId}/workflow`)
+      .set("Cookie", roleUsers.cto.cookie)
+      .send({ action: "approve" });
+    expect(wrongApprover.status).toBe(403);
+
+    const businessApproval = await request(app)
+      .post(`/api/projects/${workflowProjectId}/workflow`)
+      .set("Cookie", roleUsers.md.cookie)
+      .send({ action: "approve" });
+    expect(businessApproval.body.project.workflowStage).toBe("technical_review");
+    const technicalReview = await request(app)
+      .post(`/api/projects/${workflowProjectId}/workflow`)
+      .set("Cookie", roleUsers.cto.cookie)
+      .send({ action: "approve" });
+    expect(technicalReview.body.project.workflowStage).toBe("project_setup");
+
+    const planning = await request(app)
+      .patch(`/api/projects/${workflowProjectId}`)
+      .set("Cookie", roleUsers.pm.cookie)
+      .send({
+        scope: "Deliver the approved release",
+        budget: 25000,
+        dueDate: new Date(Date.now() + 86400000).toISOString(),
+        milestones: ["Design", "Release"],
+      });
+    expect(planning.status).toBe(200);
+    const planSubmit = await request(app)
+      .post(`/api/projects/${workflowProjectId}/workflow`)
+      .set("Cookie", roleUsers.pm.cookie)
+      .send({ action: "submit" });
+    expect(planSubmit.body.project.workflowStage).toBe("team_assignment");
+
+    const assignments = [
+      { department: "Development Department", teamLeadId: roleUsers.engineering.userId, memberIds: [memberId] },
+      { department: "Frontend Team", teamLeadId: memberId, memberIds: [memberId] },
+      { department: "Design Department", teamLeadId: roleUsers.design.userId, memberIds: [roleUsers.design.userId] },
+      { department: "QA Department", teamLeadId: roleUsers.qa.userId, memberIds: [roleUsers.qa.userId] },
+      { department: "DevOps Department", teamLeadId: roleUsers.devops.userId, memberIds: [roleUsers.devops.userId] },
+      { department: "Marketing Department", teamLeadId: roleUsers.marketing.userId, memberIds: [roleUsers.marketing.userId] },
+      { department: "Finance Department", teamLeadId: roleUsers.finance.userId, memberIds: [roleUsers.finance.userId] },
+    ];
+    const invalidAssignment = await request(app)
+      .patch(`/api/projects/${workflowProjectId}`)
+      .set("Cookie", roleUsers.pm.cookie)
+      .send({
+        departmentAssignments: [
+          { department: "Frontend Team", teamLeadId: memberId, memberIds: [roleUsers.qa.userId] },
+        ],
+      });
+    expect(invalidAssignment.status).toBe(400);
+
+    const assigned = await request(app)
+      .patch(`/api/projects/${workflowProjectId}`)
+      .set("Cookie", roleUsers.pm.cookie)
+      .send({ departmentAssignments: assignments });
+    expect(assigned.status).toBe(200);
+    const teamsSubmitted = await request(app)
+      .post(`/api/projects/${workflowProjectId}/workflow`)
+      .set("Cookie", roleUsers.pm.cookie)
+      .send({ action: "submit" });
+    expect(teamsSubmitted.body.project.workflowStage).toBe("design");
+    const unassignedLeadBoard = await request(app)
+      .get(`/api/projects/${workflowProjectId}`)
+      .set("Cookie", other);
+    expect(unassignedLeadBoard.status).toBe(403);
+    const unassignedLeadProjects = await request(app)
+      .get(`/api/workspaces/${workspaceId}/projects`)
+      .set("Cookie", other);
+    expect(unassignedLeadProjects.body.projects).toHaveLength(0);
+
+    for (const [cookie, action, next] of [
+      [roleUsers.design.cookie, "complete", "development"],
+      [roleUsers.engineering.cookie, "complete", "code_review"],
+      [roleUsers.engineering.cookie, "approve", "qa_testing"],
+    ]) {
+      const result = await request(app)
+        .post(`/api/projects/${workflowProjectId}/workflow`)
+        .set("Cookie", cookie)
+        .send({ action });
+      expect(result.status).toBe(200);
+      expect(result.body.project.workflowStage).toBe(next);
+    }
+
+    const blockedTask = await request(app)
+      .post(`/api/projects/${workflowProjectId}/tasks`)
+      .set("Cookie", owner)
+      .send({ title: "Work cannot start during QA" });
+    expect(blockedTask.status).toBe(409);
+
+    const qaFailed = await request(app)
+      .post(`/api/projects/${workflowProjectId}/workflow`)
+      .set("Cookie", roleUsers.qa.cookie)
+      .send({ action: "fail", note: "Checkout crashes on submit" });
+    expect(qaFailed.status).toBe(200);
+    expect(qaFailed.body.project.workflowStage).toBe("bug_fixing");
+    const boardAfterFailure = await request(app).get(`/api/projects/${workflowProjectId}`).set("Cookie", member);
+    expect(boardAfterFailure.body.tasks).toContainEqual(expect.objectContaining({
+      title: "QA bug: Checkout crashes on submit",
+      labels: ["bug"],
+    }));
+
+    const bugFixed = await request(app)
+      .post(`/api/projects/${workflowProjectId}/workflow`)
+      .set("Cookie", member)
+      .send({ action: "complete" });
+    expect(bugFixed.body.project.workflowStage).toBe("code_review");
+    const codeApproved = await request(app)
+      .post(`/api/projects/${workflowProjectId}/workflow`)
+      .set("Cookie", roleUsers.engineering.cookie)
+      .send({ action: "approve" });
+    expect(codeApproved.body.project.workflowStage).toBe("qa_testing");
+    const qaPassed = await request(app)
+      .post(`/api/projects/${workflowProjectId}/workflow`)
+      .set("Cookie", roleUsers.qa.cookie)
+      .send({ action: "pass" });
+    expect(qaPassed.body.project.workflowStage).toBe("deployment");
+
+    for (const [key, action, next] of [
+      ["devops", "deploy", "production_release"],
+      ["devops", "release", "marketing_launch"],
+      ["marketing", "launch", "finance_review"],
+      ["finance", "complete", "delivery_review"],
+      ["pm", "complete", "executive_review"],
+      ["md", "complete", "completed"],
+    ]) {
+      const result = await request(app)
+        .post(`/api/projects/${workflowProjectId}/workflow`)
+        .set("Cookie", roleUsers[key].cookie)
+        .send({ action });
+      expect(result.status).toBe(200);
+      expect(result.body.project.workflowStage).toBe(next);
+    }
+
+    const finished = await request(app).get(`/api/projects/${workflowProjectId}`).set("Cookie", owner);
+    expect(finished.body.project).toMatchObject({ status: "completed", workflowStage: "completed" });
+  }, 60000);
 
   test("moving a task to the done column updates completion percent", async () => {
     const t1 = await request(app)

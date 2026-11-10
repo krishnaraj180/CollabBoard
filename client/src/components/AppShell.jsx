@@ -169,7 +169,13 @@ export default function AppShell({ children }) {
                   null,
                   <span key="badge">
                     <span className={`nav-dot ${p.status}`} title={p.status.replace("_", " ")} />
-                    <span className="nav-pct">{p.stats?.percent ?? 0}%</span>
+                    <span
+                      className="nav-pct"
+                      title={`Task completion: ${p.stats?.percent ?? 0}%`}
+                      aria-label={`Task completion: ${p.stats?.percent ?? 0}%`}
+                    >
+                      {p.stats?.percent ?? 0}%
+                    </span>
                   </span>,
                   p._id
                 )
