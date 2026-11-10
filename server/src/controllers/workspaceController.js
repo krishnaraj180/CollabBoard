@@ -155,16 +155,14 @@ const updateRole = asyncHandler(async (req, res) => {
 const removeMember = asyncHandler(async (req, res) => {
   const workspace = await Workspace.findById(req.params.id);
   if (!workspace) throw new AppError("Workspace not found", 404);
-  const actor = requireMember(workspace, req.user._id);
+  const actor = requireRole(workspace, req.user._id, ["owner", "admin"]);
   const targetId = req.params.userId;
   const target = workspace.members.find((m) => getMemberUserId(m) === targetId);
   if (!target) throw new AppError("Member not found", 404);
   if (target.role === "owner") throw new AppError("Cannot remove the owner", 400);
   const isSelf = String(req.user._id) === targetId;
-  if (!isSelf && !["owner", "admin"].includes(actor.role)) {
-    throw new AppError("Insufficient workspace permissions", 403);
-  }
-  if (actor.role === "admin" && target.role === "admin" && !isSelf) {
+  if (isSelf) throw new AppError("You cannot remove yourself from the workspace", 403);
+  if (actor.role === "admin" && target.role === "admin") {
     throw new AppError("Admins cannot remove other admins", 403);
   }
   workspace.members = workspace.members.filter((m) => getMemberUserId(m) !== targetId);
@@ -176,7 +174,7 @@ const removeMember = asyncHandler(async (req, res) => {
     workspace: workspace._id,
     actor: req.user,
     action: "member.removed",
-    summary: isSelf ? `${removed?.name || "A member"} left the workspace` : `removed ${removed?.name || "a member"}`,
+    summary: `removed ${removed?.name || "a member"}`,
   });
   const populated = await workspace.populate("members.user", "name email avatarColor lastSeenAt");
   res.json({ workspace: populated });

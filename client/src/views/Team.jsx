@@ -82,13 +82,11 @@ export default function Team() {
     run(() => api(`/api/workspaces/${workspaceId}/members/${userId}`, { method: "PATCH", body: { role: next } }), "Role updated");
 
   const removeMember = (m) => {
-    const self = m.user._id === myId;
-    if (!window.confirm(self ? "Leave this workspace?" : `Remove ${m.user.name} from this workspace?`)) return;
-    run(async () => {
-      const data = await api(`/api/workspaces/${workspaceId}/members/${m.user._id}`, { method: "DELETE" });
-      if (self) window.location.href = "/app";
-      return data;
-    }, self ? "" : "Member removed");
+    if (!window.confirm(`Remove ${m.user.name} from this workspace?`)) return;
+    run(
+      () => api(`/api/workspaces/${workspaceId}/members/${m.user._id}`, { method: "DELETE" }),
+      "Member removed"
+    );
   };
 
   const saveSettings = (e) => {
@@ -126,7 +124,7 @@ export default function Team() {
                       const online = onlineUserIds.includes(String(m.user._id));
                       const self = m.user._id === myId;
                       const canRemove =
-                        m.role !== "owner" && (self || (isManager && !(role === "admin" && m.role === "admin")));
+                        m.role !== "owner" && isManager && !(role === "admin" && m.role === "admin");
                       return (
                         <tr key={m.user._id}>
                           <td>
@@ -155,7 +153,7 @@ export default function Team() {
                           <td>
                             {canRemove && (
                               <button className="btn secondary" onClick={() => removeMember(m)}>
-                                {self ? "Leave" : "Remove"}
+                                Remove
                               </button>
                             )}
                           </td>
