@@ -58,6 +58,44 @@ describe("permissions", () => {
     expect(strangerBoard.status).toBe(403);
   });
 
+  test("only owners and admins can remove other workspace members", async () => {
+    const ownerRes = await register(app, { email: "owner@example.com", name: "Owner" });
+    const adminRes = await register(app, { email: "admin@example.com", name: "Admin" });
+    const memberRes = await register(app, { email: "member@example.com", name: "Member" });
+    const owner = ownerRes.headers["set-cookie"][0];
+    const admin = adminRes.headers["set-cookie"][0];
+    const member = memberRes.headers["set-cookie"][0];
+
+    const ws = await request(app).post("/api/workspaces").set("Cookie", owner).send({ name: "Team" });
+    const workspaceId = ws.body.workspace._id;
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/invites`)
+      .set("Cookie", owner)
+      .send({ email: "admin@example.com", role: "admin" });
+    await request(app)
+      .post(`/api/workspaces/${workspaceId}/invites`)
+      .set("Cookie", owner)
+      .send({ email: "member@example.com", role: "member" });
+
+    const memberSelfRemoval = await request(app)
+      .delete(`/api/workspaces/${workspaceId}/members/${memberRes.body.user._id}`)
+      .set("Cookie", member);
+    const adminSelfRemoval = await request(app)
+      .delete(`/api/workspaces/${workspaceId}/members/${adminRes.body.user._id}`)
+      .set("Cookie", admin);
+    const adminRemovesMember = await request(app)
+      .delete(`/api/workspaces/${workspaceId}/members/${memberRes.body.user._id}`)
+      .set("Cookie", admin);
+    const ownerRemovesAdmin = await request(app)
+      .delete(`/api/workspaces/${workspaceId}/members/${adminRes.body.user._id}`)
+      .set("Cookie", owner);
+
+    expect(memberSelfRemoval.status).toBe(403);
+    expect(adminSelfRemoval.status).toBe(403);
+    expect(adminRemovesMember.status).toBe(200);
+    expect(ownerRemovesAdmin.status).toBe(200);
+  });
+
   test("viewers cannot mutate workspace content", async () => {
     const ownerRes = await register(app, { email: "owner@example.com", name: "Owner" });
     const viewerRes = await register(app, { email: "viewer@example.com", name: "Viewer" });
