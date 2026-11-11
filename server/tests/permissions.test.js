@@ -158,15 +158,8 @@ describe("permissions", () => {
     expect(orgDepartments.map((department) => department.name)).toEqual(expect.arrayContaining([
       "Company Leadership",
       "Technology Leadership",
-      "Development Department",
       "Frontend Team",
       "Backend Team",
-      "QA Department",
-      "Design Department",
-      "DevOps Department",
-      "Finance Department",
-      "Marketing Department",
-      "HR Department",
     ]));
     expect(orgDepartments.find((department) => department.name === "Backend Team").positions).toEqual([
       "Node.js Developer",

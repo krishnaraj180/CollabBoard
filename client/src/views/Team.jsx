@@ -16,39 +16,45 @@ const workspaceRoles = [
   ["cto", "CTO"],
   ["project_manager", "Project Manager"],
   ["engineering_manager", "Engineering Manager"],
-  ["team_lead", "Team Lead"],
   ["development_team_lead", "Development Team Lead"],
   ["react_developer", "React Developer"],
-  ["ui_developer", "UI Developer"],
   ["nodejs_developer", "Node.js Developer"],
   ["java_developer", "Java Developer"],
   ["python_developer", "Python Developer"],
-  ["qa_manager", "QA Manager"],
   ["qa_team_lead", "QA Team Lead"],
   ["qa_engineer", "QA Engineer"],
-  ["design_manager", "Design Manager"],
   ["design_team_lead", "Design Team Lead"],
   ["ui_ux_designer", "UI/UX Designer"],
-  ["devops_manager", "DevOps Manager"],
   ["devops_team_lead", "DevOps Team Lead"],
   ["devops_engineer", "DevOps Engineer"],
   ["finance_manager", "Finance Manager"],
   ["accountant", "Accountant"],
   ["finance_executive", "Finance Executive"],
-  ["marketing_manager", "Marketing Manager"],
   ["marketing_team_lead", "Marketing Team Lead"],
   ["marketing_executive", "Marketing Executive"],
   ["hr_manager", "HR Manager"],
   ["hr_executive", "HR Executive"],
-  ["recruiter", "Recruiter"],
   ["hr_employee", "HR Employee"],
   ["marketing", "Marketing"],
   ["finance", "Finance"],
   ["frontend_developer", "Frontend Developer (legacy)"],
   ["backend_developer", "Backend Developer (legacy)"],
   ["member", "Member"],
-  ["viewer", "Viewer (read only)"],
 ];
+const hiddenDepartmentNames = new Set([
+  "Development Department",
+  "QA Department",
+  "Design Department",
+  "Finance Department",
+  "Marketing Department",
+  "HR Department",
+  "AI",
+  "AI Department",
+  "DevOps",
+  "DevOps Department",
+  "Sales",
+  "Sales Department",
+]);
 export default function Team() {
   const { workspaceId } = useParams();
   const { user } = useAuth();
@@ -64,6 +70,8 @@ export default function Team() {
 
   const myId = user?._id || user?.id;
   const me = workspace?.members?.find((m) => m.user?._id === myId);
+  const workspaceMembers = workspace?.members?.filter((m) => m.user) || [];
+  const departmentOptions = (workspace?.organization?.departments || []).filter((department) => !hiddenDepartmentNames.has(department.name));
   const role = me?.role;
   const isOwner = role === "owner";
   const isManager = role === "owner" || role === "admin";
@@ -202,7 +210,7 @@ export default function Team() {
           <div className="page-head">
             <div className="grow">
               <h1>Team & roles</h1>
-              <p className="muted">{workspace.members.length} people in {workspace.name}. Your role: <strong>{role}</strong>.</p>
+              <p className="muted">{workspaceMembers.length} people in {workspace.name}. Your role: <strong>{role}</strong>.</p>
             </div>
           </div>
 
@@ -222,7 +230,7 @@ export default function Team() {
                     </tr>
                   </thead>
                   <tbody>
-                    {workspace.members.map((m) => {
+                    {workspaceMembers.map((m) => {
                       const online = onlineUserIds.includes(String(m.user._id));
                       const self = m.user._id === myId;
                       const canRemove =
@@ -263,7 +271,7 @@ export default function Team() {
                                 }}
                               >
                                 <option value="">Unassigned</option>
-                                {workspace.organization.departments.map((department) => (
+                                {departmentOptions.map((department) => (
                                   <option key={department.name} value={department.name}>{department.name}</option>
                                 ))}
                               </select>
@@ -278,7 +286,7 @@ export default function Team() {
                                 onChange={(e) => saveOrganizationMember(m, { title: e.target.value })}
                               >
                                 <option value="">Unassigned</option>
-                                {(workspace.organization.departments.find((item) => item.name === m.department)?.positions || []).map((title) => (
+                                {(departmentOptions.find((item) => item.name === m.department)?.positions || []).map((title) => (
                                   <option key={title} value={title}>{title}</option>
                                 ))}
                               </select>
@@ -292,11 +300,11 @@ export default function Team() {
                                 onChange={(e) => saveOrganizationMember(m, { reportsTo: e.target.value || null })}
                               >
                                 <option value="">No manager</option>
-                                {workspace.members.filter((candidate) => candidate.user._id !== m.user._id).map((candidate) => (
+                                {workspaceMembers.filter((candidate) => candidate.user._id !== m.user._id).map((candidate) => (
                                   <option key={candidate.user._id} value={candidate.user._id}>{candidate.user.name}</option>
                                 ))}
                               </select>
-                            ) : <span>{workspace.members.find((candidate) => candidate.user._id === String(m.reportsTo?._id || m.reportsTo))?.user.name || "—"}</span>}
+                            ) : <span>{workspaceMembers.find((candidate) => candidate.user._id === String(m.reportsTo?._id || m.reportsTo))?.user.name || "—"}</span>}
                           </td>
                           <td data-label="Joined" className="hide-sm muted">{new Date(m.joinedAt).toLocaleDateString()}</td>
                           <td data-label="Actions">
@@ -348,7 +356,7 @@ export default function Team() {
                       <button className="btn secondary" disabled={!newDepartment.trim()}>Add department</button>
                     </form>
                     <div className="org-settings">
-                      {workspace.organization.departments.map((department) => (
+                      {departmentOptions.map((department) => (
                         <div className="org-department" key={department.name}>
                           <div className="org-department-head">
                             <strong>{department.name}</strong>
