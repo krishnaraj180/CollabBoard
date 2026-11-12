@@ -161,7 +161,7 @@ async function loadProject(req) {
 
 function requireManager(membership) {
   if (!isManager(membership.role)) {
-    throw new AppError("Only workspace owners and admins can do this", 403);
+    throw new AppError("Only workspace leadership can do this", 403);
   }
 }
 
@@ -228,7 +228,7 @@ function isAssignedToDepartments(project, userId, departments) {
 function requireTaskWorkStage(project, membership, userId) {
   const roles = TASK_STAGE_ROLES[project.workflowStage];
   if (!roles) throw new AppError("Task changes are available during design, development, and bug fixing stages", 409);
-  if (["owner", "admin", "project_manager"].includes(membership.role)) return;
+  if (isManager(membership.role) || membership.role === "project_manager") return;
   if (!roles.includes(membership.role)) {
     throw new AppError(`Your role cannot edit tasks during ${workflowLabels[project.workflowStage]}`, 403);
   }
@@ -498,7 +498,7 @@ const list = asyncHandler(async (req, res) => {
 const create = asyncHandler(async (req, res) => {
   const { workspace, membership } = await loadWorkspace(req.params.workspaceId, req.user._id);
   requireWritableMember(membership);
-  if (!["owner", "admin", "project_manager"].includes(membership.role)) {
+  if (!isManager(membership.role) && membership.role !== "project_manager") {
     throw new AppError("Only workspace leadership or project managers can create a project", 403);
   }
   if (req.body.status === "completed") {
@@ -604,7 +604,7 @@ const updateProject = asyncHandler(async (req, res) => {
   }
   if (["scope", "budget", "milestones"].some((key) => req.body[key] !== undefined)) {
     if (project.workflowStage !== "project_setup" ||
-      (membership.role !== "project_manager" && membership.role !== "owner")) {
+      (membership.role !== "project_manager" && !isManager(membership.role))) {
       throw new AppError("Only the assigned project manager can edit project planning details during project setup", 403);
     }
     if (req.body.scope !== undefined) project.scope = req.body.scope;
@@ -613,7 +613,7 @@ const updateProject = asyncHandler(async (req, res) => {
   }
   if (req.body.departmentAssignments !== undefined) {
     if (project.workflowStage !== "team_assignment" ||
-      (membership.role !== "project_manager" && membership.role !== "owner")) {
+      (membership.role !== "project_manager" && !isManager(membership.role))) {
       throw new AppError("Only the assigned project manager can assign teams during the team assignment stage", 403);
     }
     const workspaceMembers = new Map(workspace.members.map((member) => [getMemberUserId(member), member]));
@@ -1050,7 +1050,7 @@ const dashboard = asyncHandler(async (req, res) => {
     totals,
     statusCounts,
     projects: await statsForProjects(projects),
-    workload: members.members.map((m) => ({
+    workload: members.members.filter((m) => m.user).map((m) => ({
       user: m.user,
       role: m.role,
       ...(workload.get(String(m.user._id)) || { open: 0, done: 0, overdue: 0 }),

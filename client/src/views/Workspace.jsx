@@ -83,7 +83,7 @@ export default function Workspace() {
     };
   }, [socket, workspaceId]);
 
-  const isManager = dash && ["owner", "admin"].includes(dash.myRole);
+  const isManager = dash && ["owner", "admin", "ceo", "managing_director"].includes(dash.myRole);
   const canCreateProject = isManager || dash?.myRole === "project_manager";
 
   async function addProject(e) {
