@@ -139,9 +139,9 @@ export default function Board() {
   const [workflowNote, setWorkflowNote] = useState("");
 
   const myId = user?._id || user?.id;
-  const isManager = myRole === "owner" || myRole === "admin";
+  const isManager = myRole === "owner" || myRole === "admin" || myRole === "ceo" || myRole === "managing_director";
   const canEditProjectTasks = Boolean(project && taskStageRoles[project.workflowStage] && (
-    ["owner", "admin", "project_manager"].includes(myRole) ||
+    ["owner", "admin", "ceo", "managing_director", "project_manager"].includes(myRole) ||
     (taskStageRoles[project.workflowStage].includes(myRole) &&
       project.departmentAssignments?.some((assignment) =>
         taskStageDepartments[project.workflowStage]?.includes(assignment.department) &&
@@ -150,8 +150,8 @@ export default function Board() {
       ))
   ));
   const canEdit = canEditProjectTasks;
-  const canEditPlanning = project?.workflowStage === "project_setup" && ["owner", "project_manager"].includes(myRole);
-  const canAssignTeams = project?.workflowStage === "team_assignment" && ["owner", "project_manager"].includes(myRole);
+  const canEditPlanning = project?.workflowStage === "project_setup" && ["owner", "ceo", "managing_director", "project_manager"].includes(myRole);
+  const canAssignTeams = project?.workflowStage === "team_assignment" && ["owner", "ceo", "managing_director", "project_manager"].includes(myRole);
 
   async function load() {
     setLoading(true);

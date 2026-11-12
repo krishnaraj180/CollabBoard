@@ -6,6 +6,7 @@ import { api } from "../api";
 import AppShell from "../components/AppShell";
 import { ActivityFeed, Avatar } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
+import { useNav } from "../context/NavContext";
 import { useRealtime } from "../context/RealtimeContext";
 import { roleLabel } from "../lib/format";
 
@@ -58,6 +59,7 @@ const hiddenDepartmentNames = new Set([
 export default function Team() {
   const { workspaceId } = useParams();
   const { user } = useAuth();
+  const { workspaces } = useNav();
   const { onlineUserIds, socket } = useRealtime();
   const [workspace, setWorkspace] = useState(null);
   const [activity, setActivity] = useState([]);
@@ -74,7 +76,24 @@ export default function Team() {
   const departmentOptions = (workspace?.organization?.departments || []).filter((department) => !hiddenDepartmentNames.has(department.name));
   const role = me?.role;
   const isOwner = role === "owner";
-  const isManager = role === "owner" || role === "admin";
+  const isManager = role === "owner" || role === "admin" || role === "ceo" || role === "managing_director";
+  const canChangeRoles = isOwner || role === "ceo";
+  const hasManagingDirector = workspaceMembers.some((member) => member.role === "managing_director");
+  const isManagingDirectorElsewhere = (userId) =>
+    workspaces.some((item) =>
+      item._id !== workspaceId &&
+      item.members?.some((member) =>
+        member.role === "managing_director" &&
+        String(member.user?._id || member.user) === String(userId)
+      )
+    );
+  const inviteeIsManagingDirectorElsewhere = workspaces.some((item) =>
+    item._id !== workspaceId &&
+    item.members?.some((member) =>
+      member.role === "managing_director" &&
+      member.user?.email?.toLowerCase() === invite.email.trim().toLowerCase()
+    )
+  );
 
   async function load() {
     try {
@@ -234,7 +253,11 @@ export default function Team() {
                       const online = onlineUserIds.includes(String(m.user._id));
                       const self = m.user._id === myId;
                       const canRemove =
-                        m.role !== "owner" && isManager && !(role === "admin" && m.role === "admin");
+                        m.role !== "owner" &&
+                        isManager &&
+                        !self &&
+                        !(role === "admin" && m.role === "admin") &&
+                        !(role === "managing_director" && ["admin", "ceo", "managing_director"].includes(m.role));
                       return (
                         <tr key={m.user._id}>
                           <td data-label="Person">
@@ -249,9 +272,15 @@ export default function Team() {
                             </div>
                           </td>
                           <td data-label="Access">
-                            {isOwner && m.role !== "owner" ? (
+                            {canChangeRoles && m.role !== "owner" && !(role === "ceo" && m.role === "ceo") ? (
                               <select value={m.role} onChange={(e) => changeRole(m.user._id, e.target.value)} aria-label={`Access role for ${m.user.name}`}>
-                                {workspaceRoles.map(([value, label]) => (
+                                {workspaceRoles.filter(([value]) =>
+                                  (role !== "managing_director" || !["admin", "ceo", "managing_director"].includes(value)) &&
+                                  (value !== "managing_director" ||
+                                    m.role === "managing_director" ||
+                                    (!hasManagingDirector && !isManagingDirectorElsewhere(m.user._id))) &&
+                                  (role !== "ceo" || value !== "ceo")
+                                ).map(([value, label]) => (
                                   <option key={value} value={value}>{label}</option>
                                 ))}
                               </select>
@@ -331,11 +360,15 @@ export default function Team() {
                 <>
                   <section className="box">
                     <h3>Invite a teammate</h3>
-                    <p className="muted">They need an existing CollabBoard account.</p>
+                    <p className="muted">They need an existing CollabBoard account. Each location has one MD, and an MD can belong to only one location.</p>
                     <form className="col-form" onSubmit={sendInvite}>
                       <input type="email" required placeholder="name@company.com" value={invite.email} onChange={(e) => setInvite({ ...invite, email: e.target.value })} />
                       <select value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })}>
-                        {workspaceRoles.map(([value, label]) => (
+                        {workspaceRoles.filter(([value]) =>
+                          (role !== "managing_director" || !["admin", "ceo", "managing_director"].includes(value)) &&
+                          (role !== "admin" || !["ceo", "managing_director"].includes(value)) &&
+                          (value !== "managing_director" || (!hasManagingDirector && !inviteeIsManagingDirectorElsewhere))
+                        ).map(([value, label]) => (
                           <option key={value} value={value}>{label}</option>
                         ))}
                       </select>
@@ -408,19 +441,21 @@ export default function Team() {
                       ))}
                     </div>
                   </section>
-                  <section className="box">
-                    <h3>Workspace settings</h3>
-                    <form className="col-form" onSubmit={saveSettings}>
-                      <input value={settings.name} onChange={(e) => setSettings({ ...settings, name: e.target.value })} required minLength={2} maxLength={80} aria-label="Workspace name" />
-                      <textarea rows={3} value={settings.description} onChange={(e) => setSettings({ ...settings, description: e.target.value })} maxLength={400} aria-label="Description" />
-                      <button className="btn secondary">Save</button>
-                    </form>
-                  </section>
+                  {role !== "managing_director" && (
+                    <section className="box">
+                      <h3>Workspace settings</h3>
+                      <form className="col-form" onSubmit={saveSettings}>
+                        <input value={settings.name} onChange={(e) => setSettings({ ...settings, name: e.target.value })} required minLength={2} maxLength={80} aria-label="Workspace name" />
+                        <textarea rows={3} value={settings.description} onChange={(e) => setSettings({ ...settings, description: e.target.value })} maxLength={400} aria-label="Description" />
+                        <button className="btn secondary">Save</button>
+                      </form>
+                    </section>
+                  )}
                 </>
               ) : (
                 <section className="box">
                   <h3>Member access</h3>
-                  <p className="muted">Workspace owners and admins manage invitations. Project actions and approvals are limited to the assigned organizational roles.</p>
+                  <p className="muted">Workspace leadership and the assigned Managing Director manage this location. Project actions and approvals follow organizational roles.</p>
                 </section>
               )}
               <section className="box">

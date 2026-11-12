@@ -44,7 +44,7 @@ const ROLES = {
 
 const WORKSPACE_ROLES = Object.values(ROLES);
 const ASSIGNABLE_WORKSPACE_ROLES = WORKSPACE_ROLES.filter((role) => role !== ROLES.OWNER);
-const MANAGER_ROLES = [ROLES.OWNER, ROLES.ADMIN];
+const MANAGER_ROLES = [ROLES.OWNER, ROLES.ADMIN, ROLES.CEO, ROLES.MANAGING_DIRECTOR];
 const PROJECT_TEAM_ROLES = [
   ROLES.ENGINEERING_MANAGER,
   ROLES.TEAM_LEAD,
@@ -90,16 +90,16 @@ const WORKFLOW_REVIEW_ROLES = {
  */
 const PERMISSIONS = {
   // Workspace management
-  "workspace:update": [ROLES.OWNER, ROLES.ADMIN],
+  "workspace:update": [ROLES.OWNER, ROLES.ADMIN, ROLES.CEO],
   "workspace:delete": [ROLES.OWNER],
-  "member:invite": [ROLES.OWNER, ROLES.ADMIN],
-  "member:remove": [ROLES.OWNER, ROLES.ADMIN],
-  "member:role": [ROLES.OWNER],
+  "member:invite": [ROLES.OWNER, ROLES.ADMIN, ROLES.CEO, ROLES.MANAGING_DIRECTOR],
+  "member:remove": [ROLES.OWNER, ROLES.ADMIN, ROLES.CEO, ROLES.MANAGING_DIRECTOR],
+  "member:role": [ROLES.OWNER, ROLES.CEO],
 
   // Project management
-  "project:create": [ROLES.OWNER, ROLES.ADMIN],
-  "project:update": [ROLES.OWNER, ROLES.ADMIN],
-  "project:delete": [ROLES.OWNER, ROLES.ADMIN],
+  "project:create": [ROLES.OWNER, ROLES.ADMIN, ROLES.CEO, ROLES.MANAGING_DIRECTOR],
+  "project:update": [ROLES.OWNER, ROLES.ADMIN, ROLES.CEO, ROLES.MANAGING_DIRECTOR],
+  "project:delete": [ROLES.OWNER, ROLES.ADMIN, ROLES.CEO, ROLES.MANAGING_DIRECTOR],
 
   // Task management
   "task:create": [ROLES.OWNER, ROLES.ADMIN, ROLES.MEMBER],
@@ -152,7 +152,7 @@ function requirePermission(workspace, userId, permission) {
 }
 
 function canManageMembers(role) {
-  return role === ROLES.OWNER || role === ROLES.ADMIN;
+  return role === ROLES.OWNER || role === ROLES.ADMIN || role === ROLES.CEO;
 }
 
 function isManager(role) {

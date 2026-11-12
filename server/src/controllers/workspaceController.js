@@ -85,6 +85,42 @@ const list = asyncHandler(async (req, res) => {
   res.json({ workspaces });
 });
 
+async function validateLeadershipAssignment(workspace, userId, role, currentMemberId = null) {
+  const otherDirectorLocation = await Workspace.findOne({
+    _id: { $ne: workspace._id },
+    members: { $elemMatch: { user: userId, role: "managing_director" } },
+  }).select("name");
+
+  if (role === "managing_director") {
+    const anotherDirector = workspace.members.find((member) =>
+      member.role === "managing_director" &&
+      getMemberUserId(member) !== String(currentMemberId || userId)
+    );
+    if (anotherDirector) {
+      throw new AppError("This location already has a Managing Director", 409);
+    }
+
+    const otherLocation = await Workspace.findOne({
+      _id: { $ne: workspace._id },
+      members: { $elemMatch: { user: userId } },
+    }).select("name");
+    if (otherLocation) {
+      throw new AppError(`A Managing Director can only belong to one location; this user is already in ${otherLocation.name}`, 409);
+    }
+  } else if (otherDirectorLocation) {
+    throw new AppError(`This user is the Managing Director in ${otherDirectorLocation.name} and cannot belong to another location`, 409);
+  }
+
+  if (role === "ceo") {
+    const otherCeo = await Workspace.findOne({
+      members: { $elemMatch: { user: { $ne: userId }, role: "ceo" } },
+    }).select("_id");
+    if (otherCeo) {
+      throw new AppError("A different CEO is already assigned to the company", 409);
+    }
+  }
+}
+
 const create = asyncHandler(async (req, res) => {
   const workspace = await Workspace.create({
     name: req.body.name,
@@ -130,13 +166,20 @@ const getOne = asyncHandler(async (req, res) => {
 const invite = asyncHandler(async (req, res) => {
   const workspace = await Workspace.findById(req.params.id);
   if (!workspace) throw new AppError("Workspace not found", 404);
-  requireRole(workspace, req.user._id, ["owner", "admin"]);
+  const actor = requireRole(workspace, req.user._id, ["owner", "admin", "ceo", "managing_director"]);
+  if (actor.role === "managing_director" && ["admin", "ceo", "managing_director"].includes(req.body.role)) {
+    throw new AppError("Managing directors cannot invite workspace leadership", 403);
+  }
+  if (actor.role === "admin" && ["ceo", "managing_director"].includes(req.body.role)) {
+    throw new AppError("Only the CEO or workspace owner can assign company leadership", 403);
+  }
 
   const invitee = await User.findOne({ email: req.body.email.toLowerCase() });
   if (!invitee) throw new AppError("No account exists for that email", 404);
   if (workspace.members.some((m) => getMemberUserId(m) === String(invitee._id))) {
     throw new AppError("User is already a member", 409);
   }
+  await validateLeadershipAssignment(workspace, invitee._id, req.body.role);
 
   workspace.members.push({ user: invitee._id, role: req.body.role });
   await workspace.save();
@@ -168,7 +211,7 @@ const invite = asyncHandler(async (req, res) => {
 const update = asyncHandler(async (req, res) => {
   const workspace = await Workspace.findById(req.params.id);
   if (!workspace) throw new AppError("Workspace not found", 404);
-  requireRole(workspace, req.user._id, ["owner", "admin"]);
+  requireRole(workspace, req.user._id, ["owner", "admin", "ceo"]);
   if (req.body.name !== undefined) workspace.name = req.body.name;
   if (req.body.description !== undefined) workspace.description = req.body.description;
   await workspace.save();
@@ -179,10 +222,14 @@ const update = asyncHandler(async (req, res) => {
 const updateRole = asyncHandler(async (req, res) => {
   const workspace = await Workspace.findById(req.params.id);
   if (!workspace) throw new AppError("Workspace not found", 404);
-  requireRole(workspace, req.user._id, ["owner"]);
+  const actor = requireRole(workspace, req.user._id, ["owner", "ceo"]);
   const member = workspace.members.find((m) => getMemberUserId(m) === req.params.userId);
   if (!member) throw new AppError("Member not found", 404);
   if (member.role === "owner") throw new AppError("Cannot change the owner role", 400);
+  if (actor.role === "ceo" && String(req.user._id) === req.params.userId && req.body.role !== "ceo") {
+    throw new AppError("The CEO cannot remove their own company role", 403);
+  }
+  await validateLeadershipAssignment(workspace, member.user, req.body.role, req.params.userId);
   const wasProjectManager = member.role === "project_manager";
   member.role = req.body.role;
   await workspace.save();
@@ -212,7 +259,7 @@ const updateRole = asyncHandler(async (req, res) => {
 const updateOrganizationMember = asyncHandler(async (req, res) => {
   const workspace = await Workspace.findById(req.params.id);
   if (!workspace) throw new AppError("Workspace not found", 404);
-  requireRole(workspace, req.user._id, ["owner", "admin"]);
+  requireRole(workspace, req.user._id, ["owner", "admin", "ceo", "managing_director"]);
   const member = workspace.members.find((m) => getMemberUserId(m) === req.params.userId);
   if (!member) throw new AppError("Member not found", 404);
 
@@ -251,7 +298,7 @@ const updateOrganizationMember = asyncHandler(async (req, res) => {
 const updateOrganization = asyncHandler(async (req, res) => {
   const workspace = await Workspace.findById(req.params.id);
   if (!workspace) throw new AppError("Workspace not found", 404);
-  requireRole(workspace, req.user._id, ["owner", "admin"]);
+  requireRole(workspace, req.user._id, ["owner", "admin", "ceo", "managing_director"]);
 
   workspace.organization.departments = req.body.departments;
   workspace.organization.version = 2;
@@ -270,7 +317,7 @@ const updateOrganization = asyncHandler(async (req, res) => {
 const removeMember = asyncHandler(async (req, res) => {
   const workspace = await Workspace.findById(req.params.id);
   if (!workspace) throw new AppError("Workspace not found", 404);
-  const actor = requireRole(workspace, req.user._id, ["owner", "admin"]);
+  const actor = requireRole(workspace, req.user._id, ["owner", "admin", "ceo", "managing_director"]);
   const targetId = req.params.userId;
   const target = workspace.members.find((m) => getMemberUserId(m) === targetId);
   if (!target) throw new AppError("Member not found", 404);
@@ -279,6 +326,9 @@ const removeMember = asyncHandler(async (req, res) => {
   if (isSelf) throw new AppError("You cannot remove yourself from the workspace", 403);
   if (actor.role === "admin" && target.role === "admin") {
     throw new AppError("Admins cannot remove other admins", 403);
+  }
+  if (actor.role === "managing_director" && ["admin", "ceo", "managing_director"].includes(target.role)) {
+    throw new AppError("Managing directors cannot remove workspace leadership", 403);
   }
   workspace.members = workspace.members
     .filter((m) => getMemberUserId(m) !== targetId)
