@@ -1,5 +1,6 @@
 const request = require("supertest");
 const { startDb, stopDb, clearDb, createTestApp, register, advanceProjectToDevelopment } = require("./helpers");
+const User = require("../src/models/User");
 
 describe("project management features", () => {
   let app;
@@ -10,6 +11,7 @@ describe("project management features", () => {
   let projectId;
   let ownerId;
   let memberId;
+  let otherId;
 
   beforeAll(async () => {
     await startDb();
@@ -27,6 +29,7 @@ describe("project management features", () => {
     other = x.headers["set-cookie"][0];
     ownerId = o.body.user._id;
     memberId = m.body.user._id;
+    otherId = x.body.user._id;
 
     const ws = await request(app).post("/api/workspaces").set("Cookie", owner).send({ name: "Atlas" });
     workspaceId = ws.body.workspace._id;
@@ -161,6 +164,68 @@ describe("project management features", () => {
     expect(unassignedAfterDemotion.body.projects.find((item) => item._id === projectId).projectManager).toBeNull();
     const projectAfterDemotion = await request(app).get(`/api/projects/${projectId}`).set("Cookie", pm);
     expect(projectAfterDemotion.status).toBe(403);
+  });
+
+  test("workspace leadership can add eligible members to an active project without changing its workflow stage", async () => {
+    const invited = await request(app)
+      .post(`/api/workspaces/${workspaceId}/invites`)
+      .set("Cookie", owner)
+      .send({ email: "other@example.com", role: "frontend_developer" });
+    expect(invited.status).toBe(200);
+
+    const setDepartment = (department, title) =>
+      request(app)
+        .patch(`/api/workspaces/${workspaceId}/members/${otherId}/organization`)
+        .set("Cookie", owner)
+        .send({ department, title });
+    const wrongDepartment = await setDepartment("Backend Team", "Node.js Developer");
+    expect(wrongDepartment.status).toBe(200);
+
+    const rejected = await request(app)
+      .post(`/api/projects/${projectId}/team-members`)
+      .set("Cookie", owner)
+      .send({ department: "Frontend Team", memberIds: [otherId] });
+    expect(rejected.status).toBe(400);
+
+    const correctDepartment = await setDepartment("Frontend Team", "React Developer");
+    expect(correctDepartment.status).toBe(200);
+    const blockedMember = await request(app)
+      .post(`/api/projects/${projectId}/team-members`)
+      .set("Cookie", member)
+      .send({ department: "Frontend Team", memberIds: [otherId] });
+    expect(blockedMember.status).toBe(403);
+
+    const beforeAccess = await request(app)
+      .get(`/api/projects/${projectId}`)
+      .set("Cookie", other);
+    expect(beforeAccess.status).toBe(403);
+
+    const added = await request(app)
+      .post(`/api/projects/${projectId}/team-members`)
+      .set("Cookie", owner)
+      .send({ department: "Frontend Team", memberIds: [otherId] });
+    expect(added.status).toBe(200);
+    expect(added.body.project.workflowStage).toBe("development");
+    expect(added.body.addedMemberIds).toEqual([otherId]);
+    const frontendTeam = added.body.project.departmentAssignments.find((assignment) => assignment.department === "Frontend Team");
+    expect(frontendTeam.members.map((assignedMember) => assignedMember._id)).toContain(otherId);
+
+    const afterAccess = await request(app)
+      .get(`/api/projects/${projectId}`)
+      .set("Cookie", other);
+    expect(afterAccess.status).toBe(200);
+
+    const duplicate = await request(app)
+      .post(`/api/projects/${projectId}/team-members`)
+      .set("Cookie", owner)
+      .send({ department: "Frontend Team", memberIds: [otherId] });
+    expect(duplicate.status).toBe(200);
+    expect(duplicate.body.addedMemberIds).toEqual([]);
+    expect(
+      duplicate.body.project.departmentAssignments
+        .find((assignment) => assignment.department === "Frontend Team")
+        .members.filter((assignedMember) => assignedMember._id === otherId)
+    ).toHaveLength(1);
   });
 
   test("role-based workflow enforces approvals, QA bug loops, deployment, and executive completion", async () => {
@@ -446,6 +511,17 @@ describe("project management features", () => {
 
     const blocked = await request(app).get(`/api/workspaces/${workspaceId}/dashboard`).set("Cookie", other);
     expect(blocked.status).toBe(403);
+  });
+
+  test("dashboard ignores workspace members whose user records no longer exist", async () => {
+    await User.findByIdAndDelete(memberId);
+
+    const dash = await request(app)
+      .get(`/api/workspaces/${workspaceId}/dashboard`)
+      .set("Cookie", owner);
+
+    expect(dash.status).toBe(200);
+    expect(dash.body.workload.every((row) => row.user)).toBe(true);
   });
 
   test("removing a member unassigns their tasks; deleting a project removes its tasks", async () => {

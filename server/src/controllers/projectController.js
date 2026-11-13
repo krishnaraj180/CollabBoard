@@ -57,6 +57,14 @@ const projectUpdateSchema = z.object({
   }),
 });
 
+const projectTeamMembersSchema = z.object({
+  params: z.object({ id: z.string() }),
+  body: z.object({
+    department: z.string().trim().min(1).max(60),
+    memberIds: z.array(z.string()).min(1).max(100),
+  }),
+});
+
 const workflowTransitionSchema = z.object({
   params: z.object({ id: z.string() }),
   body: z.object({
@@ -672,6 +680,72 @@ const updateProject = asyncHandler(async (req, res) => {
   res.json({ project: withStats });
 });
 
+const addProjectTeamMembers = asyncHandler(async (req, res) => {
+  const { project, workspace, membership } = await loadProject(req);
+  if (!canManageAssignedProject(project, membership, req.user._id)) {
+    throw new AppError("Only workspace leadership or the assigned project manager can add team members", 403);
+  }
+  if (!["design", "development", "bug_fixing"].includes(project.workflowStage)) {
+    throw new AppError("Team members can be added during design, development, or bug fixing", 409);
+  }
+
+  const { department, memberIds } = req.body;
+  const assignment = project.departmentAssignments.find((item) => item.department === department);
+  if (!assignment) throw new AppError("This department is not assigned to the project", 400);
+
+  const workspaceMembers = new Map(workspace.members.map((member) => [getMemberUserId(member), member]));
+  const addedMemberIds = [];
+  for (const id of new Set(memberIds)) {
+    assertObjectId(id, "member id");
+    const member = workspaceMembers.get(id);
+    if (!member) throw new AppError("Team members must belong to this workspace", 400);
+    if (member.department !== department) {
+      throw new AppError(`Assign the member to ${department} in workspace settings first`, 400);
+    }
+    if (!DEPARTMENT_MEMBER_ROLES[department]?.includes(member.role)) {
+      throw new AppError(`Team members assigned to ${department} must have a matching department role`, 400);
+    }
+
+    const alreadyAssigned = String(assignment.teamLead) === id ||
+      assignment.members.some((memberId) => String(memberId) === id);
+    if (!alreadyAssigned) {
+      assignment.members.push(id);
+      addedMemberIds.push(id);
+    }
+  }
+
+  let io;
+  let summary;
+  if (addedMemberIds.length) {
+    await project.save();
+    io = req.app.get("io");
+    summary = `added ${addedMemberIds.length} member${addedMemberIds.length === 1 ? "" : "s"} to ${department}`;
+    await logActivity(io, {
+      workspace: workspace._id,
+      project: project._id,
+      projectManager: project.projectManager,
+      projectAssignments: project.departmentAssignments,
+      workflowStage: project.workflowStage,
+      workspaceMembers: workspace.members,
+      actor: req.user,
+      action: "project.team_members_added",
+      summary,
+    });
+    await notifyProjectStakeholders(io, workspace, project, req.user, summary);
+  }
+
+  await project.populate([
+    { path: "projectManager", select: USER_FIELDS },
+    { path: "departmentAssignments.teamLead", select: USER_FIELDS },
+    { path: "departmentAssignments.members", select: USER_FIELDS },
+  ]);
+  const [withStats] = await statsForProjects([project]);
+  if (addedMemberIds.length) {
+    emitToProjectWorkspace(io, workspace.members, project, "project:updated", { project: withStats });
+  }
+  res.json({ project: withStats, addedMemberIds });
+});
+
 const removeProject = asyncHandler(async (req, res) => {
   const { project, workspace, membership } = await loadProject(req);
   requireManager(membership);
@@ -1077,6 +1151,7 @@ const workspaceActivity = asyncHandler(async (req, res) => {
 module.exports = {
   createSchema,
   projectUpdateSchema,
+  projectTeamMembersSchema,
   workflowTransitionSchema,
   taskCreateSchema,
   taskUpdateSchema,
@@ -1085,6 +1160,7 @@ module.exports = {
   create,
   getBoard,
   updateProject,
+  addProjectTeamMembers,
   transitionWorkflow,
   removeProject,
   createTask,
