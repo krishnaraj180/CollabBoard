@@ -46,6 +46,7 @@ Real-time team collaboration: group chat, presence, file sharing, notifications,
 
 **Admin controls**
 - Owners/admins and Project Managers can create projects. Task changes are enabled during design, development and bug fixing; department team members only see projects they are assigned to.
+- Project teams are assigned during the team-assignment workflow stage. Workspace leadership and the assigned Project Manager can add eligible department members during design, development or bug fixing without moving the project backward.
 - Projects move through enforced MD business approval → CTO technical review → PM planning and team assignment → Design → Development → Code Review → QA. Failed QA creates a bug task and returns the project to bug fixing and review. Passed QA proceeds through DevOps deployment/release, Marketing launch, Finance review, PM delivery review and CEO/MD final approval.
 - Each workflow step is restricted to its assigned workspace role. Completing the project by changing its status directly is blocked; only final executive approval completes the workflow.
 
@@ -80,19 +81,14 @@ Real-time team collaboration: group chat, presence, file sharing, notifications,
 
 ## Local development setup
 
-Requirements: Node.js 20+, Docker Desktop (or another MongoDB instance), Git.
-
-Start MongoDB with a persistent Docker volume:
-
-```bash
-docker compose up -d mongodb
-```
+Requirements: Node.js 20+, a reachable MongoDB instance (local or MongoDB Atlas), and Git.
 
 In one terminal, configure and start the API:
 
 ```powershell
 cd server
 copy .env.example .env   # Windows (macOS/Linux: cp .env.example .env)
+# Set MONGODB_URI in server/.env to your MongoDB connection string.
 npm install
 npm run dev
 ```
@@ -106,9 +102,9 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000. The web app sends `/api` requests to the Express API at `API_URL`; Socket.IO connects to `NEXT_PUBLIC_SOCKET_URL`. The API connects to the database selected by `MONGODB_URI`. The sample values connect all three services on the same computer.
+Open http://localhost:3000. The web app sends `/api` requests to the Express API at `API_URL`; Socket.IO connects to `NEXT_PUBLIC_SOCKET_URL`. The API connects to the database selected by `MONGODB_URI`. The sample MongoDB URI expects a MongoDB server running locally; for Atlas or another hosted database, use its connection string and ensure the API host is allowed to connect.
 
-Registration creates a MongoDB user record with a hashed password. Logging in verifies that record and creates a session; workspace and collaboration content is written to MongoDB by the API. Data survives app restarts as long as the MongoDB volume is retained. For MongoDB Atlas or another database, replace `MONGODB_URI` in `server/.env` with its connection string. Never commit real environment files or production secrets.
+Registration creates a MongoDB user record with a hashed password. Logging in verifies that record and creates a session; workspace and collaboration content is written to MongoDB by the API. Data persistence depends on the configured MongoDB instance. Never commit real environment files or production secrets.
 
 For a public deployment, set `CLIENT_ORIGIN` to the frontend origin, `MONGODB_URI` and `JWT_SECRET` on the API, `API_URL` for the Next.js server-side API rewrite, and `NEXT_PUBLIC_SOCKET_URL` to the browser-reachable Socket.IO URL. Use HTTPS and set `secure` production cookies. `NEXT_PUBLIC_SOCKET_URL` is embedded at build time.
 

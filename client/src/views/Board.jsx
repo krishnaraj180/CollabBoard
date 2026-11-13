@@ -136,6 +136,10 @@ export default function Board() {
   const [budgetDraft, setBudgetDraft] = useState("");
   const [milestonesDraft, setMilestonesDraft] = useState("");
   const [teamAssignmentsDraft, setTeamAssignmentsDraft] = useState([]);
+  const [teamMemberDepartment, setTeamMemberDepartment] = useState("");
+  const [teamMemberIds, setTeamMemberIds] = useState([]);
+  const [addingTeamMembers, setAddingTeamMembers] = useState(false);
+  const [teamMemberNotice, setTeamMemberNotice] = useState("");
   const [workflowNote, setWorkflowNote] = useState("");
 
   const myId = user?._id || user?.id;
@@ -305,6 +309,29 @@ export default function Board() {
     }
   }
 
+  async function addProjectTeamMembers() {
+    setAddingTeamMembers(true);
+    setError("");
+    setTeamMemberNotice("");
+    try {
+      const data = await api(`/api/projects/${projectId}/team-members`, {
+        method: "POST",
+        body: { department: teamMemberDepartment, memberIds: teamMemberIds },
+      });
+      setProject(data.project);
+      setTeamMemberIds([]);
+      setTeamMemberNotice(
+        data.addedMemberIds.length
+          ? `Added ${data.addedMemberIds.length} member${data.addedMemberIds.length === 1 ? "" : "s"} to ${teamMemberDepartment}.`
+          : "The selected members are already assigned to this department."
+      );
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAddingTeamMembers(false);
+    }
+  }
+
   async function transitionWorkflow(action) {
     try {
       await api(`/api/projects/${projectId}/workflow`, {
@@ -347,6 +374,21 @@ export default function Board() {
   const teamLeads = workspaceMembers
     .map((member) => member.user)
     .filter(Boolean);
+  const canAddProjectTeamMembers = canManageProject &&
+    ["design", "development", "bug_fixing"].includes(project?.workflowStage);
+  const selectedTeamAssignment = project?.departmentAssignments?.find(
+    (assignment) => assignment.department === teamMemberDepartment
+  );
+  const alreadyAssignedMemberIds = new Set([
+    ...(selectedTeamAssignment?.members || []).map((member) => String(member?._id || member)),
+    ...(selectedTeamAssignment?.teamLead ? [String(selectedTeamAssignment.teamLead?._id || selectedTeamAssignment.teamLead)] : []),
+  ]);
+  const eligibleTeamMembers = workspaceMembers.filter((member) =>
+    member.department === teamMemberDepartment &&
+    (departmentMemberRoles[teamMemberDepartment] || []).includes(member.role) &&
+    member.user &&
+    !alreadyAssignedMemberIds.has(String(member.user._id))
+  );
 
   return (
     <AppShell workspaceId={workspaceId}>
@@ -500,8 +542,9 @@ export default function Board() {
                         <option value="">Select lead</option>
                         {teamLeads
                           .filter((lead) => {
-                            const role = workspaceMembers.find((member) => member.user?._id === lead._id)?.role;
-                            return (departmentLeadRoles[assignment.department] || []).includes(role);
+                            const membership = workspaceMembers.find((member) => member.user?._id === lead._id);
+                            return membership?.department === assignment.department &&
+                              (departmentLeadRoles[assignment.department] || []).includes(membership.role);
                           })
                           .map((lead) => <option key={lead._id} value={lead._id}>{lead.name}</option>)}
                       </select>
@@ -516,7 +559,8 @@ export default function Board() {
                           : row))}
                       >
                         {workspaceMembers
-                          .filter((member) => (departmentMemberRoles[assignment.department] || []).includes(member.role))
+                          .filter((member) => member.department === assignment.department &&
+                            (departmentMemberRoles[assignment.department] || []).includes(member.role))
                           .map((member) => member.user)
                           .filter(Boolean)
                           .map((member) => <option key={member._id} value={member._id}>{member.name}</option>)}
@@ -534,6 +578,60 @@ export default function Board() {
                   </button>
                   <button className="btn secondary" onClick={saveTeamAssignments}>Save assignments</button>
                 </div>
+              </div>
+            )}
+
+            {canAddProjectTeamMembers && (
+              <div className="admin-box workflow-form">
+                <h3>Add members to this project</h3>
+                <p className="muted">Add workspace members to an assigned department without changing the current workflow stage.</p>
+                <label className="field">
+                  <span>Project department</span>
+                  <select
+                    value={teamMemberDepartment}
+                    onChange={(e) => {
+                      setTeamMemberDepartment(e.target.value);
+                      setTeamMemberIds([]);
+                      setTeamMemberNotice("");
+                    }}
+                  >
+                    <option value="">Select department</option>
+                    {(project.departmentAssignments || []).map((assignment) => (
+                      <option key={assignment.department} value={assignment.department}>{assignment.department}</option>
+                    ))}
+                  </select>
+                </label>
+                {selectedTeamAssignment && (
+                  <p className="muted">
+                    Current team: {[selectedTeamAssignment.teamLead, ...(selectedTeamAssignment.members || [])]
+                      .filter(Boolean)
+                      .map((member) => member.name || "Workspace member")
+                      .join(", ")}
+                  </p>
+                )}
+                {teamMemberDepartment && (
+                  <label className="field">
+                    <span>Eligible workspace members</span>
+                    <select
+                      multiple
+                      value={teamMemberIds}
+                      onChange={(e) => setTeamMemberIds(Array.from(e.target.selectedOptions, (option) => option.value))}
+                    >
+                      {eligibleTeamMembers.map((member) => (
+                        <option key={member.user._id} value={member.user._id}>{member.user.name}</option>
+                      ))}
+                    </select>
+                    {eligibleTeamMembers.length === 0 && <span className="muted">No unassigned members match this department and role.</span>}
+                  </label>
+                )}
+                {teamMemberNotice && <p className="notice" role="status">{teamMemberNotice}</p>}
+                <button
+                  className="btn secondary"
+                  disabled={addingTeamMembers || !teamMemberDepartment || teamMemberIds.length === 0}
+                  onClick={addProjectTeamMembers}
+                >
+                  {addingTeamMembers ? "Adding members…" : "Add to project"}
+                </button>
               </div>
             )}
 
