@@ -30,6 +30,13 @@ Real-time team collaboration: group chat, presence, file sharing, notifications,
 
 ## What's new in version 2
 
+**Phase 1 — Core project management**
+- New projects start with Backlog → To do → In progress → Review → Done. Older boards keep their existing columns and receive Backlog on first board load.
+- Accessible mouse and keyboard drag-and-drop persists task status and order; task search, assignee, priority, and done filters remain available.
+- Tasks support start/end dates, 0–100 progress, sprint assignment, and same-project dependencies. Dependency cycles and cross-project references are rejected.
+- Project managers and workspace leadership can create, edit, start, and complete date-validated sprints, and create, update, track, complete, and remove dated project milestones.
+- A project timeline displays task durations, progress, dependency connectors, and milestone markers. Sprints report progress from their completed tasks.
+
 **Project completion & status**
 - Projects have a status (`planning`, `in progress`, `on hold`, `completed`), a target date and a live completion percentage computed from the tasks in the board's "done" column.
 - Boards now ship with To do → In progress → Review → Done. Moving a card into Done stamps `completedAt`; moving it back clears it.
@@ -156,8 +163,16 @@ Base URL: `/api`. Cookie or `Authorization: Bearer <token>`.
 | POST | `/projects/:id/workflow` | `{ action, note? }`; validates the current stage and actor role |
 | DELETE | `/projects/:id` | Workspace leadership (also deletes tasks) |
 | GET | `/projects/:id/activity` | Recent activity |
-| POST | `/projects/:id/tasks` | `{ title, columnId?, priority?, assignees?, labels?, checklist?, dueDate? }`; design/development/bug-fixing stages |
-| PATCH | `/projects/:id/tasks/:taskId` | Any of the above plus `order` |
+| GET/POST | `/projects/:id/sprints` | List sprints with progress; create `{ name, goal?, startDate, endDate }` |
+| PATCH | `/projects/:id/sprints/:sprintId` | Edit sprint details and dates |
+| POST | `/projects/:id/sprints/:sprintId/start` | Start a planned sprint; only one active sprint per project |
+| POST | `/projects/:id/sprints/:sprintId/complete` | Complete the active sprint |
+| GET/POST | `/projects/:id/milestones` | List or create `{ title, description?, dueDate? }` |
+| PATCH/DELETE | `/projects/:id/milestones/:milestoneId` | Update progress/details or remove a milestone |
+| POST | `/projects/:id/milestones/:milestoneId/complete` | Mark a milestone complete |
+| POST | `/projects/:id/tasks` | `{ title, columnId?, priority?, assignees?, labels?, checklist?, startDate?, dueDate?, progress?, sprintId?, dependencies? }`; design/development/bug-fixing stages |
+| PATCH | `/projects/:id/tasks/:taskId` | Update task fields, including schedule, progress, sprint, and dependencies |
+| PATCH | `/projects/:id/tasks/reorder` | Persist ordered `{ moves: [{ taskId, columnId, order }] }` |
 | DELETE | `/projects/:id/tasks/:taskId` | Creator or owner/admin |
 | POST | `/projects/:id/tasks/:taskId/comments` | `{ body }` |
 | DELETE | `/projects/:id/tasks/:taskId/comments/:commentId` | Author or owner/admin |
@@ -208,4 +223,4 @@ The original local `server/.env` is intentionally not included in the migrated Z
 
 ## Upgrading an existing database
 
-No migration is required. Projects created before this version default to status `active`, tasks default to `medium` priority, and boards without a flagged done column treat the column with id `done` (or the last column) as finished.
+No manual migration is required. Existing projects keep their stored task and workflow data; their board receives the new Backlog column when first loaded. Workspace organization structures are upgraded on read by merging the expanded default departments while retaining custom departments. Projects default to status `active`, tasks default to `medium` priority, and boards without a flagged done column treat the column with id `done` (or the last column) as finished.

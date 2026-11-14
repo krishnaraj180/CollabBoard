@@ -126,7 +126,7 @@ const create = asyncHandler(async (req, res) => {
     name: req.body.name,
     description: req.body.description || "",
     members: [{ user: req.user._id, role: "owner" }],
-    organization: { version: 2, departments: DEFAULT_DEPARTMENTS },
+    organization: { version: 3, departments: DEFAULT_DEPARTMENTS },
   });
   await ensureGeneralChannel(workspace, req.user._id);
   const populated = await workspace.populate("members.user", "name email avatarColor lastSeenAt");
@@ -140,7 +140,7 @@ const getOne = asyncHandler(async (req, res) => {
   );
   if (!workspace) throw new AppError("Workspace not found", 404);
   requireMember(workspace, req.user._id);
-  if ((workspace.organization?.version || 1) < 2) {
+  if ((workspace.organization?.version || 1) < 3) {
     const existingDepartments = new Map(
       (workspace.organization?.departments || []).map((department) => [department.name, department])
     );
@@ -157,7 +157,7 @@ const getOne = asyncHandler(async (req, res) => {
       positions: [...department.positions],
     }));
     workspace.organization.departments = mergedDepartments;
-    workspace.organization.version = 2;
+    workspace.organization.version = 3;
     await workspace.save();
   }
   res.json({ workspace });

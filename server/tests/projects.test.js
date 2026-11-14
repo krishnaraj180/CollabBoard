@@ -1,6 +1,9 @@
 const request = require("supertest");
 const { startDb, stopDb, clearDb, createTestApp, register, advanceProjectToDevelopment } = require("./helpers");
 const User = require("../src/models/User");
+const Project = require("../src/models/Project");
+const Task = require("../src/models/Task");
+const Workspace = require("../src/models/Workspace");
 
 describe("project management features", () => {
   let app;
@@ -47,6 +50,224 @@ describe("project management features", () => {
       teamLeadId: memberId,
       memberIds: [memberId],
     }]);
+  });
+
+  test("adds Backlog to legacy boards without replacing their existing columns", async () => {
+    await Project.updateOne(
+      { _id: projectId },
+      {
+        $set: {
+          columns: [
+            { id: "todo", title: "To do", order: 0 },
+            { id: "doing", title: "In progress", order: 1 },
+            { id: "review", title: "Review", order: 2 },
+            { id: "done", title: "Done", order: 3, done: true },
+          ],
+        },
+      }
+    );
+
+    const board = await request(app).get(`/api/projects/${projectId}`).set("Cookie", owner);
+    expect(board.status).toBe(200);
+    expect(board.body.project.columns.map(({ id }) => id)).toEqual(["backlog", "todo", "doing", "review", "done"]);
+  });
+
+  test("upgrades older workspace departments without removing custom departments", async () => {
+    const workspace = await Workspace.findById(workspaceId);
+    workspace.organization.version = 2;
+    workspace.organization.departments = [
+      { name: "Company Leadership", positions: ["CEO"] },
+      { name: "Custom Department", positions: ["Custom Role"] },
+    ];
+    await workspace.save();
+
+    const response = await request(app).get(`/api/workspaces/${workspaceId}`).set("Cookie", owner);
+    expect(response.status).toBe(200);
+    expect(response.body.workspace.organization.version).toBe(3);
+    expect(response.body.workspace.organization.departments.map(({ name }) => name)).toContain("QA Department");
+    expect(response.body.workspace.organization.departments).toContainEqual(
+      expect.objectContaining({ name: "Custom Department", positions: ["Custom Role"] })
+    );
+  });
+
+  test("persists task dates, progress, sprint assignment, ordering and acyclic dependencies", async () => {
+    const now = new Date();
+    const startDate = new Date(now.getTime() + 86400000).toISOString();
+    const dueDate = new Date(now.getTime() + 3 * 86400000).toISOString();
+    const taskA = await request(app)
+      .post(`/api/projects/${projectId}/tasks`)
+      .set("Cookie", owner)
+      .send({ title: "Prepare release", startDate, dueDate, progress: 20 });
+    expect(taskA.status).toBe(201);
+
+    const invalidSchedule = await request(app)
+      .patch(`/api/projects/${projectId}/tasks/${taskA.body.task._id}`)
+      .set("Cookie", owner)
+      .send({ startDate: dueDate, dueDate: startDate });
+    expect(invalidSchedule.status).toBe(400);
+
+    const taskB = await request(app)
+      .post(`/api/projects/${projectId}/tasks`)
+      .set("Cookie", owner)
+      .send({ title: "Review release", dependencies: [taskA.body.task._id] });
+    expect(taskB.status).toBe(201);
+
+    const cycle = await request(app)
+      .patch(`/api/projects/${projectId}/tasks/${taskA.body.task._id}`)
+      .set("Cookie", owner)
+      .send({ dependencies: [taskB.body.task._id] });
+    expect(cycle.status).toBe(400);
+
+    const foreignProject = await request(app)
+      .post(`/api/workspaces/${workspaceId}/projects`)
+      .set("Cookie", owner)
+      .send({ name: "Separate project" });
+    const foreignTask = await Task.create({
+      workspace: workspaceId,
+      project: foreignProject.body.project._id,
+      title: "Foreign task",
+      columnId: "todo",
+      createdBy: ownerId,
+    });
+    const crossProjectDependency = await request(app)
+      .patch(`/api/projects/${projectId}/tasks/${taskA.body.task._id}`)
+      .set("Cookie", owner)
+      .send({ dependencies: [foreignTask._id] });
+    expect(crossProjectDependency.status).toBe(400);
+
+    const reordered = await request(app)
+      .patch(`/api/projects/${projectId}/tasks/reorder`)
+      .set("Cookie", owner)
+      .send({
+        moves: [
+          { taskId: taskA.body.task._id, columnId: "doing", order: 0 },
+          { taskId: taskB.body.task._id, columnId: "backlog", order: 0 },
+        ],
+      });
+    expect(reordered.status).toBe(200);
+    const board = await request(app).get(`/api/projects/${projectId}`).set("Cookie", owner);
+    const savedA = board.body.tasks.find((task) => task._id === taskA.body.task._id);
+    const savedB = board.body.tasks.find((task) => task._id === taskB.body.task._id);
+    expect(savedA).toMatchObject({ columnId: "doing", progress: 20 });
+    expect(savedB).toMatchObject({ columnId: "backlog" });
+    expect(savedB.dependencies.map((dependency) => dependency._id)).toContain(taskA.body.task._id);
+  });
+
+  test("validates sprint dates, permissions, lifecycle and task progress", async () => {
+    const memberDenied = await request(app)
+      .post(`/api/projects/${projectId}/sprints`)
+      .set("Cookie", member)
+      .send({ name: "Denied", startDate: new Date().toISOString(), endDate: new Date(Date.now() + 86400000).toISOString() });
+    expect(memberDenied.status).toBe(403);
+
+    const date = new Date(Date.now() + 86400000);
+    const startDate = date.toISOString();
+    const endDate = new Date(date.getTime() + 7 * 86400000).toISOString();
+    const invalid = await request(app)
+      .post(`/api/projects/${projectId}/sprints`)
+      .set("Cookie", owner)
+      .send({ name: "Invalid sprint", startDate, endDate: startDate });
+    expect(invalid.status).toBe(400);
+
+    const created = await request(app)
+      .post(`/api/projects/${projectId}/sprints`)
+      .set("Cookie", owner)
+      .send({ name: "Sprint 1", goal: "Ship the release", startDate, endDate });
+    expect(created.status).toBe(201);
+    const sprintId = created.body.sprint._id;
+
+    const task = await request(app)
+      .post(`/api/projects/${projectId}/tasks`)
+      .set("Cookie", owner)
+      .send({ title: "Ship sprint task", sprintId });
+    expect(task.status).toBe(201);
+
+    const second = await request(app)
+      .post(`/api/projects/${projectId}/sprints`)
+      .set("Cookie", owner)
+      .send({ name: "Sprint 2", startDate, endDate });
+    expect(second.status).toBe(201);
+
+    const started = await request(app)
+      .post(`/api/projects/${projectId}/sprints/${sprintId}/start`)
+      .set("Cookie", owner)
+      .send({});
+    expect(started.status).toBe(200);
+    const activeDateEdit = await request(app)
+      .patch(`/api/projects/${projectId}/sprints/${sprintId}`)
+      .set("Cookie", owner)
+      .send({ endDate: new Date(date.getTime() + 8 * 86400000).toISOString() });
+    expect(activeDateEdit.status).toBe(200);
+    const invalidActiveDateEdit = await request(app)
+      .patch(`/api/projects/${projectId}/sprints/${sprintId}`)
+      .set("Cookie", owner)
+      .send({ endDate: date.toISOString() });
+    expect(invalidActiveDateEdit.status).toBe(400);
+
+    const secondStart = await request(app)
+      .post(`/api/projects/${projectId}/sprints/${second.body.sprint._id}/start`)
+      .set("Cookie", owner)
+      .send({});
+    expect(secondStart.status).toBe(409);
+
+    const completedTask = await request(app)
+      .patch(`/api/projects/${projectId}/tasks/${task.body.task._id}`)
+      .set("Cookie", owner)
+      .send({ columnId: "done" });
+    expect(completedTask.body.task.progress).toBe(100);
+
+    const completed = await request(app)
+      .post(`/api/projects/${projectId}/sprints/${sprintId}/complete`)
+      .set("Cookie", owner)
+      .send({});
+    expect(completed.status).toBe(200);
+    expect(completed.body.sprint).toMatchObject({ status: "completed", taskCount: 1, completedTaskCount: 1, progress: 100 });
+
+    const unassignedTask = await request(app)
+      .post(`/api/projects/${projectId}/tasks`)
+      .set("Cookie", owner)
+      .send({ title: "Later task" });
+    const completedSprintAssignment = await request(app)
+      .patch(`/api/projects/${projectId}/tasks/${unassignedTask.body.task._id}`)
+      .set("Cookie", owner)
+      .send({ sprintId });
+    expect(completedSprintAssignment.status).toBe(409);
+  });
+
+  test("creates, updates and completes project milestones with planner permissions", async () => {
+    const denied = await request(app)
+      .post(`/api/projects/${projectId}/milestones`)
+      .set("Cookie", member)
+      .send({ title: "Denied milestone" });
+    expect(denied.status).toBe(403);
+
+    const created = await request(app)
+      .post(`/api/projects/${projectId}/milestones`)
+      .set("Cookie", owner)
+      .send({
+        title: "Beta launch",
+        description: "Release to beta customers",
+        dueDate: new Date(Date.now() + 5 * 86400000).toISOString(),
+      });
+    expect(created.status).toBe(201);
+    const milestoneId = created.body.milestone._id;
+
+    const updated = await request(app)
+      .patch(`/api/projects/${projectId}/milestones/${milestoneId}`)
+      .set("Cookie", owner)
+      .send({ progress: 60 });
+    expect(updated.body.milestone.progress).toBe(60);
+
+    const completed = await request(app)
+      .post(`/api/projects/${projectId}/milestones/${milestoneId}/complete`)
+      .set("Cookie", owner)
+      .send({});
+    expect(completed.body.milestone).toMatchObject({ progress: 100 });
+    expect(completed.body.milestone.completedAt).toBeTruthy();
+
+    const listed = await request(app).get(`/api/projects/${projectId}/milestones`).set("Cookie", member);
+    expect(listed.status).toBe(200);
+    expect(listed.body.milestones).toHaveLength(1);
   });
 
   test("only owners and admins can change project status", async () => {

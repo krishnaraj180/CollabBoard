@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const Workspace = require("../models/Workspace");
 const Project = require("../models/Project");
 const Task = require("../models/Task");
+const Sprint = require("../models/Sprint");
 const Activity = require("../models/Activity");
 const { PROJECT_STATUSES } = Project;
 const { WORKFLOW_STAGES } = Project;
@@ -83,7 +84,11 @@ const taskCreateSchema = z.object({
     labels: z.array(z.string().max(24)).optional().default([]),
     priority: z.enum(PRIORITIES).optional(),
     checklist: checklistField.optional(),
+    startDate: dateField,
     dueDate: dateField,
+    progress: z.number().int().min(0).max(100).optional(),
+    sprintId: z.string().nullable().optional(),
+    dependencies: z.array(z.string()).max(100).optional(),
   }),
 });
 
@@ -98,8 +103,67 @@ const taskUpdateSchema = z.object({
     labels: z.array(z.string().max(24)).optional(),
     priority: z.enum(PRIORITIES).optional(),
     checklist: checklistField.optional(),
+    startDate: dateField,
+    dueDate: dateField,
+    progress: z.number().int().min(0).max(100).optional(),
+    sprintId: z.string().nullable().optional(),
+    dependencies: z.array(z.string()).max(100).optional(),
+  }),
+});
+
+const taskReorderSchema = z.object({
+  params: z.object({ id: z.string() }),
+  body: z.object({
+    moves: z.array(z.object({
+      taskId: z.string(),
+      columnId: z.string(),
+      order: z.number().int().min(0).max(10000),
+    })).min(1).max(500),
+  }),
+});
+
+const sprintCreateSchema = z.object({
+  params: z.object({ id: z.string() }),
+  body: z.object({
+    name: z.string().trim().min(2).max(80),
+    goal: z.string().trim().max(1000).optional().default(""),
+    startDate: z.string().min(1),
+    endDate: z.string().min(1),
+  }),
+});
+
+const sprintUpdateSchema = z.object({
+  params: z.object({ id: z.string(), sprintId: z.string() }),
+  body: z.object({
+    name: z.string().trim().min(2).max(80).optional(),
+    goal: z.string().trim().max(1000).optional(),
+    startDate: z.string().min(1).optional(),
+    endDate: z.string().min(1).optional(),
+  }),
+});
+
+const milestoneCreateSchema = z.object({
+  params: z.object({ id: z.string() }),
+  body: z.object({
+    title: z.string().trim().min(2).max(120),
+    description: z.string().trim().max(1000).optional().default(""),
     dueDate: dateField,
   }),
+});
+
+const milestoneUpdateSchema = z.object({
+  params: z.object({ id: z.string(), milestoneId: z.string() }),
+  body: z.object({
+    title: z.string().trim().min(2).max(120).optional(),
+    description: z.string().trim().max(1000).optional(),
+    dueDate: dateField,
+    progress: z.number().int().min(0).max(100).optional(),
+  }),
+});
+
+const emptyBodySchema = z.object({
+  params: z.object({ id: z.string(), sprintId: z.string().optional(), milestoneId: z.string().optional() }),
+  body: z.object({}).optional().default({}),
 });
 
 const commentSchema = z.object({
@@ -147,6 +211,32 @@ function parseDate(value) {
   return d;
 }
 
+function assertTaskDateRange(startDate, dueDate) {
+  if (startDate && dueDate && dueDate < startDate) {
+    throw new AppError("Task due date must be on or after its start date", 400);
+  }
+}
+
+function assertSprintDateRange(startDate, endDate) {
+  if (!startDate || !endDate || endDate <= startDate) {
+    throw new AppError("Sprint end date must be after its start date", 400);
+  }
+}
+
+async function ensureBacklogColumn(project) {
+  if (project.columns.some((column) => column.id === "backlog")) return;
+  const existing = [...project.columns]
+    .sort((a, b) => a.order - b.order)
+    .map((column, index) => ({
+      id: column.id,
+      title: column.title,
+      order: index + 1,
+      done: column.done,
+    }));
+  project.columns = [{ id: "backlog", title: "Backlog", order: 0 }, ...existing];
+  await project.save();
+}
+
 async function loadWorkspace(id, userId) {
   assertObjectId(id, "workspace id");
   const workspace = await Workspace.findById(id);
@@ -176,6 +266,53 @@ function requireManager(membership) {
 function canManageAssignedProject(project, membership, userId) {
   return isManager(membership.role) ||
     (membership.role === "project_manager" && String(project.projectManager?._id || project.projectManager) === String(userId));
+}
+
+function requireProjectPlanner(project, membership, userId) {
+  if (!canManageAssignedProject(project, membership, userId)) {
+    throw new AppError("Only workspace leadership or the assigned project manager can manage this project plan", 403);
+  }
+}
+
+async function resolveSprint(projectId, sprintId, currentSprintId = null) {
+  if (sprintId === null || sprintId === "") return null;
+  assertObjectId(sprintId, "sprint id");
+  const sprint = await Sprint.findOne({ _id: sprintId, project: projectId });
+  if (!sprint) throw new AppError("Sprint not found in this project", 400);
+  if (sprint.status === "completed" && String(sprint._id) !== String(currentSprintId || "")) {
+    throw new AppError("Tasks cannot be assigned to a completed sprint", 409);
+  }
+  return sprint._id;
+}
+
+async function validateTaskDependencies(projectId, taskId, dependencyIds) {
+  const ids = [...new Set(dependencyIds.map(String))];
+  ids.forEach((id) => assertObjectId(id, "dependency task id"));
+  const taskIdString = taskId ? String(taskId) : null;
+  if (taskIdString && ids.includes(taskIdString)) {
+    throw new AppError("A task cannot depend on itself", 400);
+  }
+  if (!ids.length) return [];
+
+  const matching = await Task.find({ project: projectId, _id: { $in: ids } }).select("_id");
+  if (matching.length !== ids.length) {
+    throw new AppError("Dependencies must belong to this project", 400);
+  }
+  if (!taskIdString) return ids;
+
+  const rows = await Task.find({ project: projectId }).select("_id dependencies").lean();
+  const graph = new Map(rows.map((row) => [String(row._id), (row.dependencies || []).map(String)]));
+  graph.set(taskIdString, ids);
+  function reaches(currentId, targetId, visited = new Set()) {
+    if (currentId === targetId) return true;
+    if (visited.has(currentId)) return false;
+    visited.add(currentId);
+    return (graph.get(currentId) || []).some((nextId) => reaches(nextId, targetId, visited));
+  }
+  if (ids.some((id) => reaches(id, taskIdString))) {
+    throw new AppError("Task dependencies cannot contain a cycle", 400);
+  }
+  return ids;
 }
 
 async function notifyProjectStakeholders(io, workspace, project, actor, update) {
@@ -431,6 +568,8 @@ async function populateTask(task) {
     { path: "assignees", select: USER_FIELDS },
     { path: "createdBy", select: "name" },
     { path: "comments.author", select: "name avatarColor" },
+    { path: "sprint", select: "name goal startDate endDate status" },
+    { path: "dependencies", select: "title columnId startDate dueDate progress" },
   ]);
   return task;
 }
@@ -544,6 +683,7 @@ const create = asyncHandler(async (req, res) => {
 
 const getBoard = asyncHandler(async (req, res) => {
   const { project, membership } = await loadProject(req);
+  await ensureBacklogColumn(project);
   await project.populate([
     { path: "projectManager", select: USER_FIELDS },
     { path: "workflowHistory.actor", select: "name avatarColor" },
@@ -554,6 +694,8 @@ const getBoard = asyncHandler(async (req, res) => {
     .populate("assignees", USER_FIELDS)
     .populate("createdBy", "name")
     .populate("comments.author", "name avatarColor")
+    .populate("sprint", "name goal startDate endDate status")
+    .populate("dependencies", "title columnId startDate dueDate progress")
     .sort({ order: 1, createdAt: 1 });
   res.json({
     project: { ...project.toObject(), overdue: projectOverdue(project) },
@@ -751,6 +893,7 @@ const removeProject = asyncHandler(async (req, res) => {
   requireManager(membership);
   const io = req.app.get("io");
   await Task.deleteMany({ project: project._id });
+  await Sprint.deleteMany({ project: project._id });
   await Activity.deleteMany({ project: project._id });
   await project.deleteOne();
   emitToProjectWorkspace(io, workspace.members, project, "project:deleted", { projectId: String(project._id) });
@@ -792,6 +935,11 @@ const createTask = asyncHandler(async (req, res) => {
     throw new AppError("Unknown column", 400);
   }
   assertAssigneesInWorkspace(workspace, req.body.assignees || []);
+  const startDate = parseDate(req.body.startDate);
+  const dueDate = parseDate(req.body.dueDate);
+  assertTaskDateRange(startDate, dueDate);
+  const sprint = req.body.sprintId === undefined ? null : await resolveSprint(project._id, req.body.sprintId);
+  const dependencies = await validateTaskDependencies(project._id, null, req.body.dependencies || []);
   const last = await Task.findOne({ project: project._id, columnId }).sort({ order: -1 });
   const finished = doneColumnIds(project).includes(columnId);
   const task = await Task.create({
@@ -805,7 +953,11 @@ const createTask = asyncHandler(async (req, res) => {
     labels: req.body.labels || [],
     priority: req.body.priority || "medium",
     checklist: req.body.checklist || [],
-    dueDate: parseDate(req.body.dueDate) || undefined,
+    startDate: startDate || undefined,
+    dueDate: dueDate || undefined,
+    progress: req.body.progress ?? (finished ? 100 : 0),
+    sprint,
+    dependencies,
     completedAt: finished ? new Date() : undefined,
     createdBy: req.user._id,
   });
@@ -853,6 +1005,15 @@ const updateTask = asyncHandler(async (req, res) => {
     throw new AppError("Unknown column", 400);
   }
   if (req.body.assignees) assertAssigneesInWorkspace(workspace, req.body.assignees);
+  const startDate = req.body.startDate === undefined ? task.startDate : parseDate(req.body.startDate);
+  const dueDate = req.body.dueDate === undefined ? task.dueDate : parseDate(req.body.dueDate);
+  assertTaskDateRange(startDate, dueDate);
+  const sprint = req.body.sprintId === undefined
+    ? task.sprint
+    : await resolveSprint(project._id, req.body.sprintId, task.sprint);
+  const dependencies = req.body.dependencies === undefined
+    ? task.dependencies
+    : await validateTaskDependencies(project._id, task._id, req.body.dependencies);
 
   const before = {
     columnId: task.columnId,
@@ -860,10 +1021,21 @@ const updateTask = asyncHandler(async (req, res) => {
     assignees: task.assignees.map(String),
   };
 
-  ["title", "description", "columnId", "order", "assignees", "labels", "priority"].forEach((key) => {
+  ["title", "description", "columnId", "order", "assignees", "labels", "priority", "progress"].forEach((key) => {
     if (req.body[key] !== undefined) task[key] = req.body[key];
   });
-  if (req.body.dueDate !== undefined) task.dueDate = parseDate(req.body.dueDate);
+  if (req.body.columnId !== undefined && req.body.columnId !== before.columnId && req.body.order === undefined) {
+    const lastInColumn = await Task.findOne({
+      project: project._id,
+      columnId: req.body.columnId,
+      _id: { $ne: task._id },
+    }).sort({ order: -1 });
+    task.order = (lastInColumn?.order ?? -1) + 1;
+  }
+  task.startDate = startDate;
+  task.dueDate = dueDate;
+  task.sprint = sprint;
+  task.dependencies = dependencies;
   if (req.body.checklist !== undefined) {
     // Keep existing sub-document ids so clients can diff, new items get fresh ids.
     task.checklist = req.body.checklist.map((item) =>
@@ -876,6 +1048,9 @@ const updateTask = asyncHandler(async (req, res) => {
   const doneIds = doneColumnIds(project);
   const wasDone = doneIds.includes(before.columnId);
   const isDone = doneIds.includes(task.columnId);
+  if (req.body.progress === undefined && isDone !== wasDone) {
+    task.progress = isDone ? 100 : 0;
+  }
   if (isDone && !wasDone) task.completedAt = new Date();
   if (!isDone && wasDone) task.completedAt = undefined;
 
@@ -943,6 +1118,337 @@ const updateTask = asyncHandler(async (req, res) => {
   res.json({ task });
 });
 
+const reorderTasks = asyncHandler(async (req, res) => {
+  const { project, workspace, membership } = await loadProject(req);
+  requireWritableMember(membership);
+  requireTaskWorkStage(project, membership, req.user._id);
+
+  const ids = req.body.moves.map((move) => {
+    assertObjectId(move.taskId, "task id");
+    if (!project.columns.some((column) => column.id === move.columnId)) {
+      throw new AppError("Unknown column", 400);
+    }
+    return new mongoose.Types.ObjectId(move.taskId).toString();
+  });
+  if (new Set(ids).size !== ids.length) {
+    throw new AppError("A task can only appear once in a reorder request", 400);
+  }
+  const tasks = await Task.find({ project: project._id, _id: { $in: ids } });
+  if (tasks.length !== ids.length) throw new AppError("Tasks must belong to this project", 400);
+
+  const moves = new Map(req.body.moves.map((move) => [new mongoose.Types.ObjectId(move.taskId).toString(), move]));
+  const doneIds = new Set(doneColumnIds(project));
+  const io = req.app.get("io");
+  for (const task of tasks) {
+    const move = moves.get(String(task._id));
+    const previousColumnId = task.columnId;
+    const wasDone = doneIds.has(task.columnId);
+    const isDone = doneIds.has(move.columnId);
+    const destinationTitle = project.columns.find((column) => column.id === move.columnId)?.title || move.columnId;
+    if (task.columnId !== move.columnId) {
+      task.columnId = move.columnId;
+      if (isDone !== wasDone) {
+        task.progress = isDone ? 100 : 0;
+        task.completedAt = isDone ? new Date() : undefined;
+      }
+    }
+    task.order = move.order;
+    await task.save();
+    await populateTask(task);
+    emitToProjectWorkspace(io, workspace.members, project, "task:updated", {
+      type: "updated",
+      projectId: String(project._id),
+      task,
+    });
+    if (previousColumnId !== move.columnId) {
+      await logActivity(io, {
+        workspace: workspace._id,
+        project: project._id,
+        projectManager: project.projectManager,
+        projectAssignments: project.departmentAssignments,
+        workflowStage: project.workflowStage,
+        workspaceMembers: workspace.members,
+        task: task._id,
+        actor: req.user,
+        action: isDone ? "task.completed" : "task.moved",
+        summary: isDone
+          ? `completed “${task.title}”`
+          : `moved “${task.title}” to ${destinationTitle}`,
+      });
+      if (isDone && !wasDone) {
+        await notifyAssignees(io, {
+          workspace,
+          project,
+          task,
+          actor: req.user,
+          ids: [task.createdBy._id || task.createdBy, ...task.assignees.map((assignee) => assignee._id || assignee)],
+          type: "task.completed",
+          title: `${req.user.name} completed a task`,
+        });
+      }
+      await notifyProjectStakeholders(io, workspace, project, req.user, `moved “${task.title}” to ${destinationTitle}`);
+    }
+  }
+  res.json({ tasks });
+});
+
+async function recordPlanningUpdate(req, workspace, project, event, data, action, summary) {
+  const io = req.app.get("io");
+  emitToProjectWorkspace(io, workspace.members, project, event, {
+    projectId: String(project._id),
+    ...data,
+  });
+  await logActivity(io, {
+    workspace: workspace._id,
+    project: project._id,
+    projectManager: project.projectManager,
+    projectAssignments: project.departmentAssignments,
+    workflowStage: project.workflowStage,
+    workspaceMembers: workspace.members,
+    actor: req.user,
+    action,
+    summary,
+  });
+}
+
+async function sprintProgress(project, sprints) {
+  const doneIds = new Set(doneColumnIds(project));
+  const progressBySprint = new Map(sprints.map((sprint) => [String(sprint._id), { total: 0, completed: 0 }]));
+  if (sprints.length) {
+    const tasks = await Task.find({
+      project: project._id,
+      sprint: { $in: sprints.map((sprint) => sprint._id) },
+    }).select("sprint columnId").lean();
+    for (const task of tasks) {
+      const stats = progressBySprint.get(String(task.sprint));
+      if (!stats) continue;
+      stats.total += 1;
+      if (doneIds.has(task.columnId)) stats.completed += 1;
+    }
+  }
+  return sprints.map((sprint) => {
+    const stats = progressBySprint.get(String(sprint._id));
+    return {
+      ...sprint.toObject(),
+      taskCount: stats.total,
+      completedTaskCount: stats.completed,
+      progress: stats.total ? Math.round((stats.completed / stats.total) * 100) : 0,
+    };
+  });
+}
+
+const listSprints = asyncHandler(async (req, res) => {
+  const { project } = await loadProject(req);
+  const sprints = await Sprint.find({ project: project._id }).sort({ startDate: -1, createdAt: -1 });
+  res.json({ sprints: await sprintProgress(project, sprints) });
+});
+
+const createSprint = asyncHandler(async (req, res) => {
+  const { project, workspace, membership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id);
+  const startDate = parseDate(req.body.startDate);
+  const endDate = parseDate(req.body.endDate);
+  assertSprintDateRange(startDate, endDate);
+  const sprint = await Sprint.create({
+    workspace: workspace._id,
+    project: project._id,
+    name: req.body.name,
+    goal: req.body.goal,
+    startDate,
+    endDate,
+    createdBy: req.user._id,
+  });
+  await recordPlanningUpdate(
+    req,
+    workspace,
+    project,
+    "sprint:updated",
+    { type: "created", sprint },
+    "sprint.created",
+    `created sprint “${sprint.name}”`
+  );
+  const [withProgress] = await sprintProgress(project, [sprint]);
+  res.status(201).json({ sprint: withProgress });
+});
+
+const updateSprint = asyncHandler(async (req, res) => {
+  const { project, workspace, membership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id);
+  assertObjectId(req.params.sprintId, "sprint id");
+  const sprint = await Sprint.findOne({ _id: req.params.sprintId, project: project._id });
+  if (!sprint) throw new AppError("Sprint not found", 404);
+  if (sprint.status === "completed") throw new AppError("Completed sprints cannot be edited", 409);
+
+  const startDate = req.body.startDate === undefined ? sprint.startDate : parseDate(req.body.startDate);
+  const endDate = req.body.endDate === undefined ? sprint.endDate : parseDate(req.body.endDate);
+  assertSprintDateRange(startDate, endDate);
+  if (req.body.name !== undefined) sprint.name = req.body.name;
+  if (req.body.goal !== undefined) sprint.goal = req.body.goal;
+  sprint.startDate = startDate;
+  sprint.endDate = endDate;
+  await sprint.save();
+  await recordPlanningUpdate(
+    req,
+    workspace,
+    project,
+    "sprint:updated",
+    { type: "updated", sprint },
+    "sprint.updated",
+    `updated sprint “${sprint.name}”`
+  );
+  const [withProgress] = await sprintProgress(project, [sprint]);
+  res.json({ sprint: withProgress });
+});
+
+const startSprint = asyncHandler(async (req, res) => {
+  const { project, workspace, membership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id);
+  assertObjectId(req.params.sprintId, "sprint id");
+  const sprint = await Sprint.findOne({ _id: req.params.sprintId, project: project._id });
+  if (!sprint) throw new AppError("Sprint not found", 404);
+  if (sprint.status !== "planned") throw new AppError("Only planned sprints can be started", 409);
+  const activeSprint = await Sprint.findOne({ project: project._id, status: "active" });
+  if (activeSprint) throw new AppError("Complete the active sprint before starting another", 409);
+  sprint.status = "active";
+  sprint.startedAt = new Date();
+  try {
+    await sprint.save();
+  } catch (error) {
+    if (error.code === 11000) throw new AppError("Complete the active sprint before starting another", 409);
+    throw error;
+  }
+  await recordPlanningUpdate(
+    req,
+    workspace,
+    project,
+    "sprint:updated",
+    { type: "started", sprint },
+    "sprint.started",
+    `started sprint “${sprint.name}”`
+  );
+  const [withProgress] = await sprintProgress(project, [sprint]);
+  res.json({ sprint: withProgress });
+});
+
+const completeSprint = asyncHandler(async (req, res) => {
+  const { project, workspace, membership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id);
+  assertObjectId(req.params.sprintId, "sprint id");
+  const sprint = await Sprint.findOne({ _id: req.params.sprintId, project: project._id });
+  if (!sprint) throw new AppError("Sprint not found", 404);
+  if (sprint.status !== "active") throw new AppError("Only active sprints can be completed", 409);
+  sprint.status = "completed";
+  sprint.completedAt = new Date();
+  await sprint.save();
+  await recordPlanningUpdate(
+    req,
+    workspace,
+    project,
+    "sprint:updated",
+    { type: "completed", sprint },
+    "sprint.completed",
+    `completed sprint “${sprint.name}”`
+  );
+  const [withProgress] = await sprintProgress(project, [sprint]);
+  res.json({ sprint: withProgress });
+});
+
+const listMilestones = asyncHandler(async (req, res) => {
+  const { project } = await loadProject(req);
+  res.json({ milestones: project.projectMilestones });
+});
+
+const createMilestone = asyncHandler(async (req, res) => {
+  const { project, workspace, membership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id);
+  const dueDate = parseDate(req.body.dueDate);
+  project.projectMilestones.push({
+    title: req.body.title,
+    description: req.body.description,
+    dueDate: dueDate || undefined,
+  });
+  await project.save();
+  const milestone = project.projectMilestones[project.projectMilestones.length - 1];
+  await recordPlanningUpdate(
+    req,
+    workspace,
+    project,
+    "milestone:updated",
+    { type: "created", milestone },
+    "milestone.created",
+    `created milestone “${milestone.title}”`
+  );
+  res.status(201).json({ milestone });
+});
+
+const updateMilestone = asyncHandler(async (req, res) => {
+  const { project, workspace, membership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id);
+  assertObjectId(req.params.milestoneId, "milestone id");
+  const milestone = project.projectMilestones.id(req.params.milestoneId);
+  if (!milestone) throw new AppError("Milestone not found", 404);
+  if (req.body.title !== undefined) milestone.title = req.body.title;
+  if (req.body.description !== undefined) milestone.description = req.body.description;
+  if (req.body.dueDate !== undefined) milestone.dueDate = parseDate(req.body.dueDate);
+  if (req.body.progress !== undefined) {
+    milestone.progress = req.body.progress;
+    milestone.completedAt = req.body.progress === 100 ? (milestone.completedAt || new Date()) : undefined;
+  }
+  await project.save();
+  await recordPlanningUpdate(
+    req,
+    workspace,
+    project,
+    "milestone:updated",
+    { type: "updated", milestone },
+    "milestone.updated",
+    `updated milestone “${milestone.title}”`
+  );
+  res.json({ milestone });
+});
+
+const completeMilestone = asyncHandler(async (req, res) => {
+  const { project, workspace, membership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id);
+  assertObjectId(req.params.milestoneId, "milestone id");
+  const milestone = project.projectMilestones.id(req.params.milestoneId);
+  if (!milestone) throw new AppError("Milestone not found", 404);
+  milestone.progress = 100;
+  milestone.completedAt = milestone.completedAt || new Date();
+  await project.save();
+  await recordPlanningUpdate(
+    req,
+    workspace,
+    project,
+    "milestone:updated",
+    { type: "completed", milestone },
+    "milestone.completed",
+    `completed milestone “${milestone.title}”`
+  );
+  res.json({ milestone });
+});
+
+const removeMilestone = asyncHandler(async (req, res) => {
+  const { project, workspace, membership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id);
+  assertObjectId(req.params.milestoneId, "milestone id");
+  const milestone = project.projectMilestones.id(req.params.milestoneId);
+  if (!milestone) throw new AppError("Milestone not found", 404);
+  const title = milestone.title;
+  milestone.deleteOne();
+  await project.save();
+  await recordPlanningUpdate(
+    req,
+    workspace,
+    project,
+    "milestone:updated",
+    { type: "deleted", milestoneId: req.params.milestoneId },
+    "milestone.deleted",
+    `deleted milestone “${title}”`
+  );
+  res.json({ ok: true });
+});
+
 const removeTask = asyncHandler(async (req, res) => {
   const { project, workspace, membership } = await loadProject(req);
   requireWritableMember(membership);
@@ -954,6 +1460,10 @@ const removeTask = asyncHandler(async (req, res) => {
   if (!isCreator && !canManageAssignedProject(project, membership, req.user._id)) {
     throw new AppError("Only the creator, assigned project manager, or workspace admin can delete this task", 403);
   }
+  await Task.updateMany(
+    { project: project._id, dependencies: existing._id },
+    { $pull: { dependencies: existing._id } }
+  );
   await existing.deleteOne();
   const io = req.app.get("io");
   emitToProjectWorkspace(io, workspace.members, project, "task:updated", {
@@ -1155,6 +1665,12 @@ module.exports = {
   workflowTransitionSchema,
   taskCreateSchema,
   taskUpdateSchema,
+  taskReorderSchema,
+  sprintCreateSchema,
+  sprintUpdateSchema,
+  milestoneCreateSchema,
+  milestoneUpdateSchema,
+  emptyBodySchema,
   commentSchema,
   list,
   create,
@@ -1165,6 +1681,17 @@ module.exports = {
   removeProject,
   createTask,
   updateTask,
+  reorderTasks,
+  listSprints,
+  createSprint,
+  updateSprint,
+  startSprint,
+  completeSprint,
+  listMilestones,
+  createMilestone,
+  updateMilestone,
+  completeMilestone,
+  removeMilestone,
   removeTask,
   addComment,
   removeComment,
