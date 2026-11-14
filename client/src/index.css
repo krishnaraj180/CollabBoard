@@ -383,13 +383,16 @@ textarea { resize: vertical; width: 100%; }
 .tabs button.on { color: var(--accent); border-color: var(--accent); }
 .add-task { display: flex; gap: 8px; margin-bottom: 10px; }
 .add-task input { flex: 1; }
-.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
-.filters input[type="search"] { flex: 1 1 200px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-sm); }
+.filters input[type="search"] { flex: 1 1 240px; min-width: 0; }
+.filters select { min-width: 150px; }
 .check { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
 
-.kanban { display: grid; grid-template-columns: repeat(var(--cols, 3), minmax(250px, 1fr)); gap: 16px; align-items: start; }
-.column { background: color-mix(in srgb, var(--chip) 70%, transparent); border: 1px solid var(--line); border-radius: 16px; padding: 12px; min-height: 320px; transition: background 0.15s, border-color 0.15s; }
-.column h3 { margin: 4px 4px 12px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.kanban { display: grid; grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); gap: 14px; align-items: stretch; min-width: 0; }
+.column { min-width: 0; background: color-mix(in srgb, var(--chip) 70%, transparent); border: 1px solid var(--line); border-radius: 16px; padding: 14px; min-height: 320px; transition: background 0.15s, border-color 0.15s; }
+.column h3 { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 14px; padding: 2px 2px 12px; border-bottom: 1px solid var(--line); font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.column h3 .count { margin-left: auto; }
+.column .empty { margin: 0; padding: 14px 10px; background: color-mix(in srgb, var(--card) 55%, transparent); }
 .column.drag-over { border-color: var(--accent); background: var(--accent-soft); }
 .task { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 10px; cursor: grab; box-shadow: var(--shadow-sm); transition: box-shadow 0.15s, transform 0.15s; }
 .task:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
@@ -884,4 +887,69 @@ textarea { resize: vertical; width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
+}
+
+.tabs { overflow-x: auto; }
+.tabs button { white-space: nowrap; }
+.task-drag-handle { flex: none; border: 0; border-radius: 6px; padding: 2px 6px; background: var(--chip); color: var(--muted); line-height: 1.2; cursor: grab; touch-action: none; }
+.task-drag-handle:hover, .task-drag-handle:focus-visible { background: var(--accent-soft); color: var(--accent-ink); }
+.planning-panel, .timeline-panel { display: grid; gap: 14px; min-width: 0; }
+.planning-form { display: grid; gap: 14px; }
+.planning-form-heading, .sprint-card-heading, .milestone-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.planning-form-heading h3, .sprint-card h3, .milestone-card h3 { margin: 0 0 4px; }
+.planning-form-heading p, .sprint-card p, .milestone-card p { margin: 0; }
+.planning-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.planning-description { grid-column: 1 / -1; }
+.sprint-list, .milestone-list { display: grid; gap: 12px; }
+.sprint-card, .milestone-card { display: grid; gap: 14px; }
+.sprint-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.sprint-status { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 999px; background: var(--chip); color: var(--muted); font-size: 11px; font-weight: 700; text-transform: capitalize; }
+.sprint-status.active { background: var(--accent-soft); color: var(--accent-ink); }
+.sprint-status.completed { background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good); }
+.sprint-dates { display: grid; gap: 5px; justify-items: end; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.sprint-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.milestone-card.completed { border-color: color-mix(in srgb, var(--good) 40%, var(--line)); }
+.timeline-legend { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: 12px; }
+.timeline-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.timeline-legend i { width: 14px; height: 8px; border-radius: 4px; display: inline-block; }
+.gantt-legend-task { background: var(--accent-soft); border: 1px solid var(--accent); }
+.gantt-legend-progress { background: var(--accent); }
+.gantt-legend-milestone { width: 9px !important; height: 9px !important; border-radius: 1px !important; background: var(--warn); transform: rotate(45deg); }
+.gantt-legend-dependency { height: 2px !important; background: var(--muted); }
+.gantt-scroll { overflow: auto; max-width: 100%; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+.gantt-sheet { min-width: 960px; }
+.gantt-header, .gantt-body { display: flex; }
+.gantt-header { position: sticky; top: 0; z-index: 4; background: var(--sidebar); border-bottom: 1px solid var(--line); }
+.gantt-task-heading { position: sticky; left: 0; z-index: 5; flex: none; width: 240px; padding: 12px; border-right: 1px solid var(--line); color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.gantt-scale { position: relative; flex: none; height: 40px; }
+.gantt-scale span { position: absolute; top: 12px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.gantt-labels { flex: none; background: var(--card); }
+.gantt-label-row { display: grid; align-content: center; gap: 3px; padding: 0 12px; border-bottom: 1px solid var(--line); overflow: hidden; }
+.gantt-label-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.gantt-label-row span { color: var(--muted); font-size: 11px; }
+.gantt-track { position: relative; flex: none; overflow: hidden; background-image: linear-gradient(to bottom, transparent calc(100% - 1px), var(--line) calc(100% - 1px)); background-size: 100% 56px; }
+.gantt-grid-line { position: absolute; z-index: 0; top: 0; bottom: 0; width: 1px; background: var(--line); opacity: 0.75; }
+.gantt-connections { position: absolute; z-index: 1; inset: 0; overflow: visible; pointer-events: none; }
+.gantt-connections path { fill: none; stroke: var(--muted); stroke-width: 1.5; opacity: 0.75; }
+.gantt-connections marker path { fill: var(--muted); stroke: none; }
+.gantt-bar { position: absolute; z-index: 2; height: 24px; overflow: hidden; border: 1px solid var(--accent); border-radius: 7px; background: var(--accent-soft); }
+.gantt-bar.done { border-color: var(--good); background: color-mix(in srgb, var(--good) 17%, var(--card)); }
+.gantt-bar span { display: block; height: 100%; background: var(--accent); opacity: 0.55; }
+.gantt-bar.done span { background: var(--good); }
+.gantt-milestone-marker { position: absolute; z-index: 3; top: 0; border-left: 2px dashed var(--warn); pointer-events: none; }
+.gantt-milestone-marker span { position: absolute; top: 5px; left: -6px; width: 10px; height: 10px; border-radius: 1px; background: var(--warn); transform: rotate(45deg); }
+.gantt-milestone-marker.complete { border-color: var(--good); }
+.gantt-milestone-marker.complete span { background: var(--good); }
+.timeline-dependency-note { margin: 0; color: var(--muted); font-size: 12px; }
+.unscheduled-tasks { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+.unscheduled-tasks h3 { margin: 0 0 8px; font-size: 14px; }
+.unscheduled-tasks ul { margin: 0; padding-left: 20px; color: var(--muted); font-size: 13px; }
+.task-dependencies select { min-height: 100px; }
+
+@media (max-width: 650px) {
+  .planning-fields { grid-template-columns: minmax(0, 1fr); }
+  .planning-description { grid-column: auto; }
+  .planning-form-heading, .sprint-card-heading, .milestone-heading { flex-direction: column; }
+  .sprint-dates { justify-items: start; white-space: normal; }
+  .sprint-actions .btn { flex: 1 1 auto; }
 }

@@ -49,6 +49,17 @@ const departmentAssignmentSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const projectMilestoneSchema = new mongoose.Schema(
+  {
+    title: { type: String, required: true, trim: true, maxlength: 120 },
+    description: { type: String, default: "", maxlength: 1000 },
+    dueDate: { type: Date },
+    progress: { type: Number, min: 0, max: 100, default: 0 },
+    completedAt: { type: Date },
+  },
+  { timestamps: true }
+);
+
 const projectSchema = new mongoose.Schema(
   {
     workspace: { type: mongoose.Schema.Types.ObjectId, ref: "Workspace", required: true, index: true },
@@ -57,10 +68,11 @@ const projectSchema = new mongoose.Schema(
     columns: {
       type: [columnSchema],
       default: [
-        { id: "todo", title: "To do", order: 0 },
-        { id: "doing", title: "In progress", order: 1 },
-        { id: "review", title: "Review", order: 2 },
-        { id: "done", title: "Done", order: 3, done: true },
+        { id: "backlog", title: "Backlog", order: 0 },
+        { id: "todo", title: "To do", order: 1 },
+        { id: "doing", title: "In progress", order: 2 },
+        { id: "review", title: "Review", order: 3 },
+        { id: "done", title: "Done", order: 4, done: true },
       ],
     },
     status: { type: String, enum: PROJECT_STATUSES, default: "active" },
@@ -71,6 +83,7 @@ const projectSchema = new mongoose.Schema(
     scope: { type: String, default: "", maxlength: 4000 },
     budget: { type: Number, min: 0, default: null },
     milestones: { type: [String], default: [] },
+    projectMilestones: { type: [projectMilestoneSchema], default: [] },
     departmentAssignments: { type: [departmentAssignmentSchema], default: [] },
     workflowStage: { type: String, enum: WORKFLOW_STAGES, default: "business_approval" },
     workflowHistory: { type: [workflowEntrySchema], default: [] },

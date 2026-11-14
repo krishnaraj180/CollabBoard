@@ -3,13 +3,18 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
+import { arrayMove } from "@dnd-kit/sortable";
 import { api } from "../api";
 import AppShell from "../components/AppShell";
+import MilestonePanel from "../components/MilestonePanel";
+import ProjectKanban from "../components/ProjectKanban";
+import ProjectTimeline from "../components/ProjectTimeline";
+import SprintPanel from "../components/SprintPanel";
 import TaskDrawer from "../components/TaskDrawer";
-import { ActivityFeed, AvatarStack, ProgressBar, StatCard, StatusBadge } from "../components/ui";
+import { ActivityFeed, ProgressBar, StatCard, StatusBadge } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
 import { useRealtime } from "../context/RealtimeContext";
-import { PRIORITIES, PROJECT_STATUS, dueTone, formatDate, isDoneColumn, toInputDate } from "../lib/format";
+import { PRIORITIES, PROJECT_STATUS, formatDate, isDoneColumn, toInputDate } from "../lib/format";
 
 const workflowStages = [
   ["business_approval", "MD business approval"],
@@ -117,6 +122,8 @@ export default function Board() {
   const router = useRouter();
   const [project, setProject] = useState(null);
   const [tasks, setTasks] = useState([]);
+  const [sprints, setSprints] = useState([]);
+  const [milestones, setMilestones] = useState([]);
   const [members, setMembers] = useState([]);
   const [workspaceMembers, setWorkspaceMembers] = useState([]);
   const [departments, setDepartments] = useState([]);
@@ -126,10 +133,10 @@ export default function Board() {
   const [activity, setActivity] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [planningLoading, setPlanningLoading] = useState(true);
   const [title, setTitle] = useState("");
   const [priority, setPriority] = useState("medium");
   const [openId, setOpenId] = useState(null);
-  const [dragOver, setDragOver] = useState(null);
   const [filters, setFilters] = useState({ q: "", assignee: "", priority: "", hideDone: false });
   const [tab, setTab] = useState("board");
   const [scopeDraft, setScopeDraft] = useState("");
@@ -159,15 +166,20 @@ export default function Board() {
 
   async function load() {
     setLoading(true);
+    setPlanningLoading(true);
     setError("");
     try {
-      const [board, ws, act] = await Promise.all([
+      const [board, ws, act, sprintData, milestoneData] = await Promise.all([
         api(`/api/projects/${projectId}`),
         api(`/api/workspaces/${workspaceId}`),
         api(`/api/projects/${projectId}/activity`),
+        api(`/api/projects/${projectId}/sprints`),
+        api(`/api/projects/${projectId}/milestones`),
       ]);
       setProject(board.project);
       setTasks(board.tasks);
+      setSprints(sprintData.sprints);
+      setMilestones(milestoneData.milestones);
       setMyRole(board.myRole);
       setMembers(ws.workspace.members.map((m) => m.user).filter(Boolean));
       setWorkspaceMembers(ws.workspace.members);
@@ -187,6 +199,29 @@ export default function Board() {
       setError(err.message);
     } finally {
       setLoading(false);
+      setPlanningLoading(false);
+    }
+  }
+
+  async function refreshSprints() {
+    try {
+      const data = await api(`/api/projects/${projectId}/sprints`);
+      setSprints(data.sprints);
+      return data.sprints;
+    } catch (err) {
+      setError(err.message);
+      throw err;
+    }
+  }
+
+  async function refreshMilestones() {
+    try {
+      const data = await api(`/api/projects/${projectId}/milestones`);
+      setMilestones(data.milestones);
+      return data.milestones;
+    } catch (err) {
+      setError(err.message);
+      throw err;
     }
   }
 
@@ -218,15 +253,29 @@ export default function Board() {
     function onActivity(a) {
       if (a.project === projectId) setActivity((list) => [a, ...list].slice(0, 40));
     }
+    function onSprint({ projectId: id }) {
+      if (id === projectId) {
+        api(`/api/projects/${projectId}/sprints`).then((data) => setSprints(data.sprints)).catch((err) => setError(err.message));
+      }
+    }
+    function onMilestone({ projectId: id }) {
+      if (id === projectId) {
+        api(`/api/projects/${projectId}/milestones`).then((data) => setMilestones(data.milestones)).catch((err) => setError(err.message));
+      }
+    }
     socket.on("task:updated", onTask);
     socket.on("project:updated", onProject);
     socket.on("project:deleted", onDeleted);
     socket.on("activity:new", onActivity);
+    socket.on("sprint:updated", onSprint);
+    socket.on("milestone:updated", onMilestone);
     return () => {
       socket.off("task:updated", onTask);
       socket.off("project:updated", onProject);
       socket.off("project:deleted", onDeleted);
       socket.off("activity:new", onActivity);
+      socket.off("sprint:updated", onSprint);
+      socket.off("milestone:updated", onMilestone);
     };
   }, [socket, projectId, workspaceId, router]);
 
@@ -262,12 +311,65 @@ export default function Board() {
   async function moveTask(taskId, columnId) {
     const task = tasks.find((t) => t._id === taskId);
     if (!task || task.columnId === columnId) return;
-    // optimistic: the socket echo replaces this with the server copy
-    setTasks((list) => list.map((t) => (t._id === taskId ? { ...t, columnId } : t)));
+    const order = tasks
+      .filter((item) => item.columnId === columnId)
+      .reduce((max, item) => Math.max(max, item.order), -1) + 1;
+    setTasks((list) => list.map((t) => (t._id === taskId ? { ...t, columnId, order } : t)));
     try {
-      await api(`/api/projects/${projectId}/tasks/${taskId}`, { method: "PATCH", body: { columnId } });
+      await api(`/api/projects/${projectId}/tasks/${taskId}`, { method: "PATCH", body: { columnId, order } });
     } catch (err) {
       setTasks((list) => list.map((t) => (t._id === taskId ? task : t)));
+      setError(err.message);
+    }
+  }
+
+  async function dropTask({ taskId, targetColumnId, targetTaskId, filtering: hasFilters }) {
+    const task = tasks.find((item) => String(item._id) === String(taskId));
+    if (!task || !targetColumnId) return;
+    if (hasFilters && task.columnId === targetColumnId) return;
+
+    const sortedInColumn = (columnId) =>
+      tasks.filter((item) => item.columnId === columnId).sort((a, b) => a.order - b.order);
+    let updatedTasks;
+    if (task.columnId === targetColumnId) {
+      const current = sortedInColumn(task.columnId);
+      const from = current.findIndex((item) => String(item._id) === String(taskId));
+      const to = targetTaskId
+        ? current.findIndex((item) => String(item._id) === String(targetTaskId))
+        : current.length - 1;
+      if (from < 0 || to < 0 || from === to) return;
+      updatedTasks = arrayMove(current, from, to).map((item, order) => ({ ...item, order }));
+    } else {
+      const source = sortedInColumn(task.columnId).filter((item) => String(item._id) !== String(taskId));
+      const destination = sortedInColumn(targetColumnId);
+      const insertionIndex = !hasFilters && targetTaskId
+        ? Math.max(0, destination.findIndex((item) => String(item._id) === String(targetTaskId)))
+        : destination.length;
+      destination.splice(insertionIndex, 0, { ...task, columnId: targetColumnId });
+      updatedTasks = [
+        ...source.map((item, order) => ({ ...item, order })),
+        ...destination.map((item, order) => ({ ...item, columnId: targetColumnId, order })),
+      ];
+    }
+
+    const snapshot = tasks;
+    const updatesById = new Map(updatedTasks.map((item) => [String(item._id), item]));
+    setTasks((list) => list.map((item) => updatesById.get(String(item._id)) || item));
+    try {
+      const data = await api(`/api/projects/${projectId}/tasks/reorder`, {
+        method: "PATCH",
+        body: {
+          moves: updatedTasks.map((item) => ({
+            taskId: item._id,
+            columnId: item.columnId,
+            order: item.order,
+          })),
+        },
+      });
+      const savedById = new Map(data.tasks.map((item) => [String(item._id), item]));
+      setTasks((list) => list.map((item) => savedById.get(String(item._id)) || item));
+    } catch (err) {
+      setTasks(snapshot);
       setError(err.message);
     }
   }
@@ -677,12 +779,40 @@ export default function Board() {
             <button role="tab" aria-selected={tab === "board"} className={tab === "board" ? "on" : ""} onClick={() => setTab("board")}>
               Board
             </button>
+            <button role="tab" aria-selected={tab === "timeline"} className={tab === "timeline" ? "on" : ""} onClick={() => setTab("timeline")}>
+              Timeline
+            </button>
+            <button role="tab" aria-selected={tab === "sprints"} className={tab === "sprints" ? "on" : ""} onClick={() => setTab("sprints")}>
+              Sprints
+            </button>
+            <button role="tab" aria-selected={tab === "milestones"} className={tab === "milestones" ? "on" : ""} onClick={() => setTab("milestones")}>
+              Milestones
+            </button>
             <button role="tab" aria-selected={tab === "activity"} className={tab === "activity" ? "on" : ""} onClick={() => setTab("activity")}>
               Activity
             </button>
           </div>
 
           {tab === "activity" && <ActivityFeed items={activity} />}
+          {tab === "timeline" && <ProjectTimeline project={project} tasks={tasks} milestones={milestones} />}
+          {tab === "sprints" && (
+            <SprintPanel
+              projectId={projectId}
+              sprints={sprints}
+              loading={planningLoading}
+              canManage={canManageProject}
+              onRefresh={refreshSprints}
+            />
+          )}
+          {tab === "milestones" && (
+            <MilestonePanel
+              projectId={projectId}
+              milestones={milestones}
+              loading={planningLoading}
+              canManage={canManageProject}
+              onRefresh={refreshMilestones}
+            />
+          )}
 
           {tab === "board" && (
             <>
@@ -736,94 +866,15 @@ export default function Board() {
                 )}
               </div>
 
-              <div className="kanban" style={{ "--cols": project.columns.length }}>
-                {[...project.columns]
-                  .sort((a, b) => a.order - b.order)
-                  .map((col) => {
-                    const items = visible.filter((t) => t.columnId === col.id).sort((a, b) => a.order - b.order);
-                    return (
-                      <section
-                        className={`column ${dragOver === col.id ? "drag-over" : ""}`}
-                        key={col.id}
-                        aria-label={col.title}
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          setDragOver(col.id);
-                        }}
-                        onDragLeave={() => setDragOver((c) => (c === col.id ? null : c))}
-                        onDrop={(e) => {
-                          const id = e.dataTransfer.getData("text/plain");
-                          setDragOver(null);
-                          if (id) moveTask(id, col.id);
-                        }}
-                      >
-                        <h3>
-                          {col.title} <span className="count">{items.length}</span>
-                        </h3>
-                        {items.length === 0 && <div className="empty">{filtering ? "No matches." : "Nothing here."}</div>}
-                        {items.map((task) => {
-                          const done = isDoneColumn(project, task.columnId);
-                          const tone = dueTone(task.dueDate, done);
-                          const checkTotal = task.checklist?.length || 0;
-                          const checkDone = task.checklist?.filter((c) => c.done).length || 0;
-                          return (
-                            <article
-                              className={`task prio-${task.priority || "medium"} ${done ? "is-done" : ""}`}
-                              key={task._id}
-                              draggable={canEdit}
-                              onDragStart={(e) => canEdit && e.dataTransfer.setData("text/plain", task._id)}
-                              onClick={() => setOpenId(task._id)}
-                              tabIndex={0}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") setOpenId(task._id);
-                              }}
-                            >
-                              <div className="task-top">
-                                <h4>{task.title}</h4>
-                                <span className={`prio-tag ${task.priority || "medium"}`}>{task.priority || "medium"}</span>
-                              </div>
-                              {task.labels?.length > 0 && (
-                                <div>
-                                  {task.labels.map((l) => (
-                                    <span className="chip" key={l}>
-                                      {l}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                              <div className="task-meta">
-                                {task.dueDate && <span className={`due ${tone}`}>{formatDate(task.dueDate)}</span>}
-                                {checkTotal > 0 && (
-                                  <span className="muted">
-                                    ☑ {checkDone}/{checkTotal}
-                                  </span>
-                                )}
-                                {task.comments?.length > 0 && <span className="muted">💬 {task.comments.length}</span>}
-                                <span className="grow" />
-                                <AvatarStack users={task.assignees || []} />
-                              </div>
-                              {canEdit && (
-                                <select
-                                  className="move-select"
-                                  value={task.columnId}
-                                  onClick={(e) => e.stopPropagation()}
-                                  onChange={(e) => moveTask(task._id, e.target.value)}
-                                  aria-label={`Move ${task.title}`}
-                                >
-                                  {project.columns.map((c) => (
-                                    <option key={c.id} value={c.id}>
-                                      Move to: {c.title}
-                                    </option>
-                                  ))}
-                                </select>
-                              )}
-                            </article>
-                          );
-                        })}
-                      </section>
-                    );
-                  })}
-              </div>
+              <ProjectKanban
+                project={project}
+                tasks={visible}
+                filtering={filtering}
+                canEdit={canEdit}
+                onOpen={setOpenId}
+                onMove={moveTask}
+                onDrop={dropTask}
+              />
             </>
           )}
 
@@ -833,6 +884,8 @@ export default function Board() {
               task={openTask}
               columns={project.columns}
               members={members}
+              tasks={tasks}
+              sprints={sprints}
               me={user}
               canDelete={canDeleteTask(openTask)}
               canEdit={canEdit}

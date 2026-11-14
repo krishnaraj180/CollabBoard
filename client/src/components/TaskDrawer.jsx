@@ -11,7 +11,11 @@ function draftFrom(task) {
     description: task.description || "",
     columnId: task.columnId,
     priority: task.priority || "medium",
+    startDate: toInputDate(task.startDate),
     dueDate: toInputDate(task.dueDate),
+    progress: task.progress ?? 0,
+    sprintId: task.sprint?._id || task.sprint || "",
+    dependencies: (task.dependencies || []).map((dependency) => String(dependency?._id || dependency)),
     assignees: (task.assignees || []).map((a) => a._id),
     labels: (task.labels || []).join(", "),
     checklist: (task.checklist || []).map((c) => ({ _id: c._id, text: c.text, done: c.done })),
@@ -22,7 +26,7 @@ function draftFrom(task) {
  * Side sheet (full screen on phones) for viewing and editing one task.
  * Field edits are batched behind "Save changes"; comments are posted immediately.
  */
-export default function TaskDrawer({ projectId, task, columns, members, me, canDelete, canEdit = true, onClose, onDeleted }) {
+export default function TaskDrawer({ projectId, task, columns, members, tasks = [], sprints = [], me, canDelete, canEdit = true, onClose, onDeleted }) {
   const [draft, setDraft] = useState(() => draftFrom(task));
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -66,6 +70,10 @@ export default function TaskDrawer({ projectId, task, columns, members, me, canD
   }
 
   async function save() {
+    if (draft.startDate && draft.dueDate && draft.startDate > draft.dueDate) {
+      setError("Task due date must be on or after its start date.");
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -76,7 +84,11 @@ export default function TaskDrawer({ projectId, task, columns, members, me, canD
           description: draft.description,
           columnId: draft.columnId,
           priority: draft.priority,
+          startDate: draft.startDate ? new Date(draft.startDate).toISOString() : null,
           dueDate: draft.dueDate ? new Date(draft.dueDate).toISOString() : null,
+          progress: Number(draft.progress),
+          sprintId: draft.sprintId || null,
+          dependencies: draft.dependencies,
           assignees: draft.assignees,
           labels: draft.labels
             .split(",")
@@ -166,8 +178,38 @@ export default function TaskDrawer({ projectId, task, columns, members, me, canD
             </select>
           </label>
           <label className="field">
+            <span>Start date</span>
+            <input type="date" value={draft.startDate} onChange={(e) => change({ startDate: e.target.value })} disabled={!canEdit} />
+          </label>
+          <label className="field">
             <span>Due date</span>
-            <input type="date" value={draft.dueDate} onChange={(e) => change({ dueDate: e.target.value })} />
+            <input type="date" value={draft.dueDate} onChange={(e) => change({ dueDate: e.target.value })} disabled={!canEdit} />
+          </label>
+          <label className="field">
+            <span>Progress ({draft.progress}%)</span>
+            <input type="range" min="0" max="100" step="5" value={draft.progress} onChange={(e) => change({ progress: Number(e.target.value) })} disabled={!canEdit} />
+          </label>
+          <label className="field">
+            <span>Sprint</span>
+            <select value={draft.sprintId} onChange={(e) => change({ sprintId: e.target.value })} disabled={!canEdit}>
+              <option value="">No sprint</option>
+              {sprints
+                .filter((sprint) => sprint.status !== "completed" || sprint._id === draft.sprintId)
+                .map((sprint) => <option key={sprint._id} value={sprint._id}>{sprint.name} ({sprint.status})</option>)}
+            </select>
+          </label>
+          <label className="field task-dependencies">
+            <span>Depends on</span>
+            <select
+              multiple
+              value={draft.dependencies}
+              onChange={(e) => change({ dependencies: Array.from(e.target.selectedOptions, (option) => option.value) })}
+              disabled={!canEdit}
+            >
+              {tasks.filter((item) => item._id !== task._id).map((item) => (
+                <option key={item._id} value={item._id}>{item.title}</option>
+              ))}
+            </select>
           </label>
           <label className="field">
             <span>Labels (comma separated)</span>
