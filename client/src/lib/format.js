@@ -13,6 +13,12 @@ export const PRIORITIES = [
 ];
 
 const WORKSPACE_ROLE_LABELS = {
+  super_admin: "Super Admin",
+  organization_admin: "Organization Admin",
+  team_lead: "Team Lead",
+  developer: "Developer",
+  qa_tester: "QA Tester",
+  viewer: "Viewer",
   owner: "Workspace owner",
   admin: "Workspace admin",
   ceo: "CEO",

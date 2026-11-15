@@ -64,7 +64,11 @@ const projectSchema = new mongoose.Schema(
   {
     workspace: { type: mongoose.Schema.Types.ObjectId, ref: "Workspace", required: true, index: true },
     name: { type: String, required: true, trim: true, maxlength: 80 },
+    clientName: { type: String, default: "", trim: true, maxlength: 120 },
     description: { type: String, default: "", maxlength: 400 },
+    quotation: { type: Number, min: 0, default: null },
+    currency: { type: String, default: "INR", trim: true, uppercase: true, maxlength: 3 },
+    startDate: { type: Date },
     columns: {
       type: [columnSchema],
       default: [
@@ -87,9 +91,15 @@ const projectSchema = new mongoose.Schema(
     departmentAssignments: { type: [departmentAssignmentSchema], default: [] },
     workflowStage: { type: String, enum: WORKFLOW_STAGES, default: "business_approval" },
     workflowHistory: { type: [workflowEntrySchema], default: [] },
+    proposal: { type: mongoose.Schema.Types.ObjectId, ref: "ProjectProposal", default: null },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   },
   { timestamps: true }
+);
+
+projectSchema.index(
+  { proposal: 1, workspace: 1 },
+  { unique: true, partialFilterExpression: { proposal: { $type: "objectId" } } }
 );
 
 module.exports = mongoose.model("Project", projectSchema);

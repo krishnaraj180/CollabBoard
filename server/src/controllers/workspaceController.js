@@ -1,5 +1,6 @@
 const { z } = require("zod");
 const Workspace = require("../models/Workspace");
+const Organization = require("../models/Organization");
 const Channel = require("../models/Channel");
 const User = require("../models/User");
 const { AppError, asyncHandler } = require("../utils/errors");
@@ -10,6 +11,15 @@ const { notifyUsers } = require("../utils/notify");
 const { logActivity } = require("../utils/activity");
 const { DEFAULT_DEPARTMENTS } = require("../utils/organization");
 const { ASSIGNABLE_WORKSPACE_ROLES } = require("../utils/access");
+
+const TEAM_LEAD_INVITE_ROLES = {
+  team_lead: ["frontend_developer", "backend_developer", "react_developer", "ui_developer", "nodejs_developer", "java_developer", "python_developer"],
+  development_team_lead: ["frontend_developer", "backend_developer", "react_developer", "ui_developer", "nodejs_developer", "java_developer", "python_developer"],
+  qa_team_lead: ["qa_engineer"],
+  design_team_lead: ["ui_ux_designer"],
+  devops_team_lead: ["devops_engineer"],
+  marketing_team_lead: ["marketing_executive"],
+};
 
 const createSchema = z.object({
   body: z.object({
@@ -78,7 +88,15 @@ async function ensureGeneralChannel(workspace, userId) {
 }
 
 const list = asyncHandler(async (req, res) => {
-  const workspaces = await Workspace.find({ "members.user": req.user._id }).populate(
+  const ownedOrganizations = await Organization.find({
+    members: { $elemMatch: { user: req.user._id, role: "organization_admin" } },
+  }).select("_id").lean();
+  const workspaces = await Workspace.find({
+    $or: [
+      { "members.user": req.user._id },
+      { organizationId: { $in: ownedOrganizations.map((organization) => organization._id) } },
+    ],
+  }).populate(
     "members.user",
     "name email avatarColor lastSeenAt"
   );
@@ -139,7 +157,13 @@ const getOne = asyncHandler(async (req, res) => {
     "name email avatarColor lastSeenAt"
   );
   if (!workspace) throw new AppError("Workspace not found", 404);
-  requireMember(workspace, req.user._id);
+  if (!workspace.members.some((member) => getMemberUserId(member) === String(req.user._id))) {
+    const companyOwner = workspace.organizationId && await Organization.exists({
+      _id: workspace.organizationId,
+      members: { $elemMatch: { user: req.user._id, role: "organization_admin" } },
+    });
+    if (!companyOwner) throw new AppError("You do not have access to this workspace", 403);
+  }
   if ((workspace.organization?.version || 1) < 3) {
     const existingDepartments = new Map(
       (workspace.organization?.departments || []).map((department) => [department.name, department])
@@ -166,7 +190,13 @@ const getOne = asyncHandler(async (req, res) => {
 const invite = asyncHandler(async (req, res) => {
   const workspace = await Workspace.findById(req.params.id);
   if (!workspace) throw new AppError("Workspace not found", 404);
-  const actor = requireRole(workspace, req.user._id, ["owner", "admin", "ceo", "managing_director"]);
+  const actor = requireRole(workspace, req.user._id, [
+    "owner", "admin", "ceo", "managing_director", ...Object.keys(TEAM_LEAD_INVITE_ROLES),
+  ]);
+  const permittedTeamRoles = TEAM_LEAD_INVITE_ROLES[actor.role];
+  if (permittedTeamRoles && !permittedTeamRoles.includes(req.body.role)) {
+    throw new AppError("Team leads can only invite members to their own team", 403);
+  }
   if (actor.role === "managing_director" && ["admin", "ceo", "managing_director"].includes(req.body.role)) {
     throw new AppError("Managing directors cannot invite workspace leadership", 403);
   }
@@ -178,6 +208,23 @@ const invite = asyncHandler(async (req, res) => {
   if (!invitee) throw new AppError("No account exists for that email", 404);
   if (workspace.members.some((m) => getMemberUserId(m) === String(invitee._id))) {
     throw new AppError("User is already a member", 409);
+  }
+  if (workspace.organizationId) {
+    const organization = await Organization.findById(workspace.organizationId).select("members");
+    const companyWideMember = organization?.members.some((member) =>
+      getMemberUserId(member) === String(invitee._id) &&
+      ["organization_admin", "business_management"].includes(member.role)
+    );
+    if (!companyWideMember) {
+      const otherLocation = await Workspace.findOne({
+        _id: { $ne: workspace._id },
+        organizationId: workspace.organizationId,
+        "members.user": invitee._id,
+      }).select("name");
+      if (otherLocation) {
+        throw new AppError(`This employee already belongs to ${otherLocation.name}; each employee can be assigned to only one location`, 409);
+      }
+    }
   }
   await validateLeadershipAssignment(workspace, invitee._id, req.body.role);
 
@@ -317,10 +364,15 @@ const updateOrganization = asyncHandler(async (req, res) => {
 const removeMember = asyncHandler(async (req, res) => {
   const workspace = await Workspace.findById(req.params.id);
   if (!workspace) throw new AppError("Workspace not found", 404);
-  const actor = requireRole(workspace, req.user._id, ["owner", "admin", "ceo", "managing_director"]);
+  const actor = requireRole(workspace, req.user._id, [
+    "owner", "admin", "ceo", "managing_director", ...Object.keys(TEAM_LEAD_INVITE_ROLES),
+  ]);
   const targetId = req.params.userId;
   const target = workspace.members.find((m) => getMemberUserId(m) === targetId);
   if (!target) throw new AppError("Member not found", 404);
+  if (TEAM_LEAD_INVITE_ROLES[actor.role] && !TEAM_LEAD_INVITE_ROLES[actor.role].includes(target.role)) {
+    throw new AppError("Team leads can only remove members from their own team", 403);
+  }
   if (target.role === "owner") throw new AppError("Cannot remove the owner", 400);
   const isSelf = String(req.user._id) === targetId;
   if (isSelf) throw new AppError("You cannot remove yourself from the workspace", 403);

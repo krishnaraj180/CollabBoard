@@ -73,7 +73,11 @@ export function NavProvider({ children }) {
   const loadSide = useCallback(
     (id) => {
       if (!id || !user) return Promise.resolve();
-      return Promise.all([api(`/api/workspaces/${id}/projects`), api(`/api/workspaces/${id}/channels`)])
+    const channelsRequest = api(`/api/workspaces/${id}/channels`).catch((error) => {
+      if (error.status === 403) return { channels: [] };
+      throw error;
+    });
+    return Promise.all([api(`/api/workspaces/${id}/projects`), channelsRequest])
         .then(([p, c]) => {
           setProjects(p.projects);
           setChannels(c.channels);

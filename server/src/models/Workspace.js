@@ -26,6 +26,7 @@ const workspaceSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, maxlength: 80 },
     description: { type: String, default: "", maxlength: 400 },
+    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: "Organization", default: null, index: true },
     members: { type: [memberSchema], default: [] },
     organization: {
       version: { type: Number, default: 1 },

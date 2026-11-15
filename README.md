@@ -15,7 +15,7 @@ Real-time team collaboration: group chat, presence, file sharing, notifications,
 ```
 
 - **Auth:** register/login issue a JWT in an httpOnly cookie and in the JSON body (Socket.IO handshake). Logout clears the cookie.
-- **Permissions:** every workspace, project, task, channel, message, and file route loads the workspace and checks membership/role on the server. Socket events do the same before joining a channel.
+- **Permissions:** every workspace, project, task, channel, message, and file route checks membership and role on the server. Organization routes use separate organization membership and RBAC checks; organization roles do not bypass the requirement for workspace membership on project resources. Socket events do the same before joining a channel.
 - **Realtime:** the API writes to MongoDB first, then emits `task:updated`, `chat:message`, `presence:update`, and `notification:new`. A second browser does not need a refresh. Chat history is loaded from MongoDB after reconnect.
 - **Files:** multipart upload through the message route, stored under `server/uploads`, served only to authenticated users.
 
@@ -27,6 +27,19 @@ Real-time team collaboration: group chat, presence, file sharing, notifications,
 - **Account page** (`/app/account`): change display name and avatar colour, change password (signs out other devices).
 - **Chat redesign:** avatars, grouped messages, timestamps, attachment chips, send button disabled when empty.
 - **Database-backed:** account credentials are hashed and saved in MongoDB; workspace, project, task, chat, notification, and activity changes are saved by the API.
+
+## What's new in version 4
+
+**Phase 2 — Organization and team management**
+- Organizations have editable profiles/settings, members, departments, workload reports, and explicit links to workspaces. Existing workspaces remain unlinked until an organization administrator links them.
+- Organization invitations are one-time, email-bound links that expire after seven days. The invited user must be signed in to the matching account to accept; organization invitations do not replace the existing workspace invitation flow.
+- Organization departments can have positions and managers. Members can be assigned a department and title; linked project department assignments continue to use the existing project model.
+- Organization roles are scoped separately from workspace roles: Organization Admin manages organization settings, membership, departments and workspace links; Project Manager manages assigned projects; Team Lead manages their assigned team; Developer and QA Tester work on projects where assigned; Viewer has read-only access.
+- **Kyro Technologies locations and project approvals:** each location links to its own workspace, and an employee can belong to only one location. Location team leads can add or remove only members of their own role group. Business Management submits client proposals with a quotation, description and project period; the CEO/Company Owner reviews and assigns an approved proposal to one or more locations. Each selected location gets a separate project board, initially at Technical Review. Business Management can follow proposals but does not get access to location project boards; the CEO/Company Owner has company-wide read-only project visibility.
+- Linked workspace project APIs accept organization-role permissions where applicable, while retaining workspace membership and project/team assignment checks. Organization workload reports aggregate pending, completed and overdue tasks from linked workspaces and display existing online presence and capacity estimates.
+- Platform-wide Super Admin access is stored separately from organization membership and is granted only by an operator with database access: `cd server; npm run grant-super-admin -- user@example.com`. There is no HTTP self-promotion endpoint.
+
+Existing data is preserved: organizations and invitations use separate collections, and `Workspace.organizationId` is optional. No migration or backfill is required; link legacy workspaces explicitly from an organization administrator account.
 
 ## What's new in version 2
 
@@ -123,7 +136,7 @@ Never commit `server/.env` or `client/.env.local`; both are gitignored. The chec
 | --- | --- |
 | `npm run dev` in `server/` | API + Socket.IO on port 5000 |
 | `npm run dev` in `client/` | Next.js on 3000; `/api` is rewritten to Express and Socket.IO connects to the configured backend |
-| `npm test` in `server/` | Auth, permissions, invalid input, realtime, project management |
+| `npm test` in `server/` | Auth, organization, permissions, invalid input, realtime, project management |
 
 ## API
 
@@ -152,6 +165,25 @@ Base URL: `/api`. Cookie or `Authorization: Bearer <token>`.
 | PATCH | `/workspaces/:id/members/:userId` | Owner `{ role }` |
 | PATCH | `/workspaces/:id/members/:userId/organization` | Owner/admin `{ department, title, reportsTo? }` |
 | DELETE | `/workspaces/:id/members/:userId` | Self, or admin/owner |
+
+### Organizations
+
+All organization routes require authentication. Except for platform Super Admins, callers must belong to the organization; each route also enforces its organization-specific permission.
+
+| Method | Path | Access / notes |
+| --- | --- | --- |
+| GET/POST | `/organizations` | List organizations or create one; creator becomes Organization Admin |
+| GET/PATCH | `/organizations/:id` | Read organization or update its profile/settings |
+| POST | `/organizations/:id/invitations` | Organization Admin; `{ email, role }`; invited account must already exist |
+| GET/DELETE | `/organizations/:id/invitations` and `/organizations/:id/invitations/:invitationId` | Organization Admin; list or revoke pending invitations |
+| POST | `/organizations/invitations/accept` | Authenticated target account; `{ token }`; one-time, email-bound, seven-day expiry |
+| PATCH/DELETE | `/organizations/:id/members/:userId` | Organization Admin; update role/department/title or remove a member |
+| POST/PATCH/DELETE | `/organizations/:id/departments` and `/organizations/:id/departments/:departmentId` | Organization Admin; manage departments, positions and managers |
+| POST/PATCH/DELETE | `/organizations/:id/locations` and `/organizations/:id/locations/:locationId` | Organization Admin; create or update a location with its linked workspace, or remove a location without assigned projects |
+| PUT/DELETE | `/organizations/:id/workspaces/:workspaceId` | Organization Admin links/unlinks a workspace; requires workspace owner/admin approval |
+| GET/POST | `/organizations/:id/proposals` | Business Management submits proposals; CEO/Company Owner lists proposals for review |
+| POST | `/organizations/:id/proposals/:proposalId/decision` | CEO/Company Owner approves with one or more linked location IDs, or rejects with an optional note |
+| GET | `/organizations/:id/workload` | Organization reporting permission; aggregates linked workspace tasks and availability |
 
 ### Projects and tasks
 

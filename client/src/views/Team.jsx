@@ -56,6 +56,14 @@ const hiddenDepartmentNames = new Set([
   "Sales",
   "Sales Department",
 ]);
+const teamLeadInviteRoles = {
+  team_lead: ["frontend_developer", "backend_developer", "react_developer", "ui_developer", "nodejs_developer", "java_developer", "python_developer"],
+  development_team_lead: ["frontend_developer", "backend_developer", "react_developer", "ui_developer", "nodejs_developer", "java_developer", "python_developer"],
+  qa_team_lead: ["qa_engineer"],
+  design_team_lead: ["ui_ux_designer"],
+  devops_team_lead: ["devops_engineer"],
+  marketing_team_lead: ["marketing_executive"],
+};
 export default function Team() {
   const { workspaceId } = useParams();
   const { user } = useAuth();
@@ -77,6 +85,8 @@ export default function Team() {
   const role = me?.role;
   const isOwner = role === "owner";
   const isManager = role === "owner" || role === "admin" || role === "ceo" || role === "managing_director";
+  const isTeamLead = Object.prototype.hasOwnProperty.call(teamLeadInviteRoles, role);
+  const canInviteTeam = isManager || isTeamLead;
   const canChangeRoles = isOwner || role === "ceo";
   const hasManagingDirector = workspaceMembers.some((member) => member.role === "managing_director");
   const isManagingDirectorElsewhere = (userId) =>
@@ -94,6 +104,15 @@ export default function Team() {
       member.user?.email?.toLowerCase() === invite.email.trim().toLowerCase()
     )
   );
+  const allowedTeamRoles = teamLeadInviteRoles[role] || [];
+  const inviteOptions = workspaceRoles.filter(([value]) => isTeamLead
+    ? allowedTeamRoles.includes(value)
+    : (role !== "managing_director" || !["admin", "ceo", "managing_director"].includes(value)) &&
+      (role !== "admin" || !["ceo", "managing_director"].includes(value)) &&
+      (value !== "managing_director" || (!hasManagingDirector && !inviteeIsManagingDirectorElsewhere)));
+  const selectedInviteRole = inviteOptions.some(([value]) => value === invite.role)
+    ? invite.role
+    : inviteOptions[0]?.[0] || "";
 
   async function load() {
     try {
@@ -142,7 +161,10 @@ export default function Team() {
   const sendInvite = (e) => {
     e.preventDefault();
     run(async () => {
-      const data = await api(`/api/workspaces/${workspaceId}/invites`, { method: "POST", body: invite });
+      const data = await api(`/api/workspaces/${workspaceId}/invites`, {
+        method: "POST",
+        body: { ...invite, role: selectedInviteRole },
+      });
       setInvite({ email: "", role: "member" });
       return data;
     }, "Teammate added");
@@ -254,10 +276,11 @@ export default function Team() {
                       const self = m.user._id === myId;
                       const canRemove =
                         m.role !== "owner" &&
-                        isManager &&
                         !self &&
-                        !(role === "admin" && m.role === "admin") &&
-                        !(role === "managing_director" && ["admin", "ceo", "managing_director"].includes(m.role));
+                        (isManager &&
+                          !(role === "admin" && m.role === "admin") &&
+                          !(role === "managing_director" && ["admin", "ceo", "managing_director"].includes(m.role)) ||
+                          isTeamLead && allowedTeamRoles.includes(m.role));
                       return (
                         <tr key={m.user._id}>
                           <td data-label="Person">
@@ -351,31 +374,31 @@ export default function Team() {
               </div>
 
               <div className="role-help muted">
-                <strong>Project workflow</strong> routes business approval to the MD, technical review to the CTO, planning and delivery to the Project Manager, then through design, engineering, QA, DevOps, Marketing, Finance, and final CEO/MD review.
+                <strong>Project workflow</strong> starts after the CEO approves a Business Management proposal and assigns it to this location. The location team then handles technical review, planning, team assignment, delivery, and final review.
               </div>
             </section>
 
             <aside className="side-col">
-              {isManager ? (
+              {canInviteTeam ? (
                 <>
                   <section className="box">
                     <h3>Invite a teammate</h3>
-                    <p className="muted">They need an existing CollabBoard account. Each location has one MD, and an MD can belong to only one location.</p>
+                    <p className="muted">
+                      They need an existing CollabBoard account. {isTeamLead
+                        ? "Team leads can invite only role-specific members to their team."
+                        : "Each location has one MD, and an MD can belong to only one location."}
+                    </p>
                     <form className="col-form" onSubmit={sendInvite}>
                       <input type="email" required placeholder="name@company.com" value={invite.email} onChange={(e) => setInvite({ ...invite, email: e.target.value })} />
-                      <select value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })}>
-                        {workspaceRoles.filter(([value]) =>
-                          (role !== "managing_director" || !["admin", "ceo", "managing_director"].includes(value)) &&
-                          (role !== "admin" || !["ceo", "managing_director"].includes(value)) &&
-                          (value !== "managing_director" || (!hasManagingDirector && !inviteeIsManagingDirectorElsewhere))
-                        ).map(([value, label]) => (
+                      <select value={selectedInviteRole} onChange={(e) => setInvite({ ...invite, role: e.target.value })}>
+                        {inviteOptions.map(([value, label]) => (
                           <option key={value} value={value}>{label}</option>
                         ))}
                       </select>
-                      <button className="btn">Add to workspace</button>
+                      <button className="btn">Add to location</button>
                     </form>
                   </section>
-                  <section className="box">
+                  {isManager && <section className="box">
                     <h3>Organization setup</h3>
                     <p className="muted">Manage the departments and positions available for team assignments.</p>
                     <form className="col-form" onSubmit={addDepartment}>
@@ -440,8 +463,8 @@ export default function Team() {
                         </div>
                       ))}
                     </div>
-                  </section>
-                  {role !== "managing_director" && (
+                  </section>}
+                  {isManager && role !== "managing_director" && (
                     <section className="box">
                       <h3>Workspace settings</h3>
                       <form className="col-form" onSubmit={saveSettings}>

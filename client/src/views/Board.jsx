@@ -103,6 +103,16 @@ const workflowStageDepartments = {
   finance_review: ["Finance Department"],
 };
 
+function organizationMemberCanFillDepartment(member, department, lead = false) {
+  if (!member || member.department !== department) return false;
+  if (lead) return member.role === "team_lead";
+  if (member.role === "team_lead") return true;
+  if (["Development Department", "Frontend Team", "Backend Team"].includes(department)) {
+    return member.role === "developer";
+  }
+  return department === "QA Department" && member.role === "qa_tester";
+}
+
 function computeStats(project, tasks) {
   const total = tasks.length;
   let completed = 0;
@@ -129,7 +139,10 @@ export default function Board() {
   const [departments, setDepartments] = useState([]);
   const [projectManagers, setProjectManagers] = useState([]);
   const [myRole, setMyRole] = useState("member");
+  const [myOrganizationRole, setMyOrganizationRole] = useState("");
   const [canManageProject, setCanManageProject] = useState(false);
+  const [canEditTasks, setCanEditTasks] = useState(false);
+  const [organizationMembers, setOrganizationMembers] = useState([]);
   const [activity, setActivity] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -150,19 +163,15 @@ export default function Board() {
   const [workflowNote, setWorkflowNote] = useState("");
 
   const myId = user?._id || user?.id;
-  const isManager = myRole === "owner" || myRole === "admin" || myRole === "ceo" || myRole === "managing_director";
-  const canEditProjectTasks = Boolean(project && taskStageRoles[project.workflowStage] && (
-    ["owner", "admin", "ceo", "managing_director", "project_manager"].includes(myRole) ||
-    (taskStageRoles[project.workflowStage].includes(myRole) &&
-      project.departmentAssignments?.some((assignment) =>
-        taskStageDepartments[project.workflowStage]?.includes(assignment.department) &&
-        (String(assignment.teamLead?._id || assignment.teamLead) === String(myId) ||
-          assignment.members?.some((member) => String(member?._id || member) === String(myId)))
-      ))
-  ));
-  const canEdit = canEditProjectTasks;
-  const canEditPlanning = project?.workflowStage === "project_setup" && ["owner", "ceo", "managing_director", "project_manager"].includes(myRole);
-  const canAssignTeams = project?.workflowStage === "team_assignment" && ["owner", "ceo", "managing_director", "project_manager"].includes(myRole);
+  const isManager = myRole === "owner" || myRole === "admin" || myRole === "ceo" ||
+    myRole === "managing_director" || myOrganizationRole === "organization_admin";
+  const canEdit = canEditTasks;
+  const canEditPlanning = project?.workflowStage === "project_setup" &&
+    (["owner", "ceo", "managing_director", "project_manager"].includes(myRole) ||
+      ["organization_admin", "project_manager"].includes(myOrganizationRole));
+  const canAssignTeams = project?.workflowStage === "team_assignment" &&
+    (["owner", "ceo", "managing_director", "project_manager"].includes(myRole) ||
+      ["organization_admin", "project_manager"].includes(myOrganizationRole));
 
   async function load() {
     setLoading(true);
@@ -181,10 +190,13 @@ export default function Board() {
       setSprints(sprintData.sprints);
       setMilestones(milestoneData.milestones);
       setMyRole(board.myRole);
+      setMyOrganizationRole(board.myOrganizationRole || "");
+      setCanEditTasks(Boolean(board.canEditTasks));
+      setOrganizationMembers(board.organizationMembers || []);
       setMembers(ws.workspace.members.map((m) => m.user).filter(Boolean));
       setWorkspaceMembers(ws.workspace.members);
-      setDepartments(ws.workspace.organization?.departments || []);
-      setProjectManagers(ws.workspace.members.filter((member) => member.role === "project_manager").map((member) => member.user).filter(Boolean));
+      setDepartments(board.organizationDepartments || ws.workspace.organization?.departments || []);
+      setProjectManagers(board.projectManagers || ws.workspace.members.filter((member) => member.role === "project_manager").map((member) => member.user).filter(Boolean));
       setCanManageProject(board.canManageProject);
       setActivity(act.activity);
       setScopeDraft(board.project.scope || "");
@@ -464,33 +476,57 @@ export default function Board() {
   const workflowButtons = workflowActions[currentWorkflowStage] || [];
   const canActOnWorkflow = (button) => {
     if (myRole === "owner") return true;
-    if (!button.roles.includes(myRole)) return false;
-    const departments = workflowStageDepartments[project?.workflowStage];
-    if (!departments) return true;
-    return project.departmentAssignments?.some((assignment) =>
+    if (button.roles.includes(myRole)) {
+      const departments = workflowStageDepartments[project?.workflowStage];
+      if (!departments) return true;
+      return project.departmentAssignments?.some((assignment) =>
       departments.includes(assignment.department) &&
       (String(assignment.teamLead?._id || assignment.teamLead) === String(myId) ||
         assignment.members?.some((member) => String(member?._id || member) === String(myId)))
-    );
+      );
+    }
+    if (myOrganizationRole === "project_manager" &&
+      button.roles.includes("project_manager") &&
+      String(project?.projectManager?._id || project?.projectManager) === String(myId)) return true;
+    const orgRoleByStage = {
+      design: ["team_lead"],
+      development: ["team_lead", "developer"],
+      qa_testing: ["team_lead", "qa_tester"],
+      bug_fixing: ["team_lead", "developer"],
+    };
+    if (!orgRoleByStage[project?.workflowStage]?.includes(myOrganizationRole)) return false;
+    const departments = workflowStageDepartments[project?.workflowStage];
+    return Boolean(departments && project.departmentAssignments?.some((assignment) =>
+      departments.includes(assignment.department) &&
+      (String(assignment.teamLead?._id || assignment.teamLead) === String(myId) ||
+        assignment.members?.some((member) => String(member?._id || member) === String(myId)))
+    ));
   };
-  const teamLeads = workspaceMembers
-    .map((member) => member.user)
-    .filter(Boolean);
-  const canAddProjectTeamMembers = canManageProject &&
-    ["design", "development", "bug_fixing"].includes(project?.workflowStage);
+  const teamLeads = members;
   const selectedTeamAssignment = project?.departmentAssignments?.find(
     (assignment) => assignment.department === teamMemberDepartment
   );
+  const isAssignedOrganizationTeamLead = myOrganizationRole === "team_lead" &&
+    project?.departmentAssignments?.some((assignment) =>
+      assignment.department === organizationMembers.find((member) => String(member.user?._id) === String(myId))?.department &&
+      String(assignment.teamLead?._id || assignment.teamLead) === String(myId)
+    );
+  const canAddProjectTeamMembers = (canManageProject || isAssignedOrganizationTeamLead) &&
+    ["design", "development", "bug_fixing"].includes(project?.workflowStage);
   const alreadyAssignedMemberIds = new Set([
     ...(selectedTeamAssignment?.members || []).map((member) => String(member?._id || member)),
     ...(selectedTeamAssignment?.teamLead ? [String(selectedTeamAssignment.teamLead?._id || selectedTeamAssignment.teamLead)] : []),
   ]);
-  const eligibleTeamMembers = workspaceMembers.filter((member) =>
-    member.department === teamMemberDepartment &&
-    (departmentMemberRoles[teamMemberDepartment] || []).includes(member.role) &&
-    member.user &&
-    !alreadyAssignedMemberIds.has(String(member.user._id))
-  );
+  const eligibleTeamMembers = workspaceMembers.filter((member) => {
+    const organizationMember = organizationMembers.find(
+      (candidate) => String(candidate.user?._id) === String(member.user?._id)
+    );
+    return member.user &&
+      (member.department === teamMemberDepartment &&
+        (departmentMemberRoles[teamMemberDepartment] || []).includes(member.role) ||
+        organizationMemberCanFillDepartment(organizationMember, teamMemberDepartment)) &&
+      !alreadyAssignedMemberIds.has(String(member.user._id));
+  });
 
   return (
     <AppShell workspaceId={workspaceId}>
@@ -511,6 +547,9 @@ export default function Board() {
               <p className="muted">{project.description || "Move cards across columns as work progresses."}</p>
               <div className="meta-row">
                 <StatusBadge status={project.status} />
+                {project.clientName && <span>Client: <strong>{project.clientName}</strong></span>}
+                {project.quotation !== null && project.quotation !== undefined && <span>Quotation: <strong>{project.currency} {Number(project.quotation).toLocaleString()}</strong></span>}
+                {project.startDate && <span>Start: {formatDate(project.startDate)}</span>}
                 {project.dueDate && (
                   <span className={`due ${project.overdue ? "overdue" : ""}`}>
                     Due {formatDate(project.dueDate)}
@@ -644,9 +683,13 @@ export default function Board() {
                         <option value="">Select lead</option>
                         {teamLeads
                           .filter((lead) => {
-                            const membership = workspaceMembers.find((member) => member.user?._id === lead._id);
+                            const membership = workspaceMembers.find((member) => String(member.user?._id) === String(lead._id));
+                            const organizationMember = organizationMembers.find(
+                              (member) => String(member.user?._id) === String(lead._id)
+                            );
                             return membership?.department === assignment.department &&
-                              (departmentLeadRoles[assignment.department] || []).includes(membership.role);
+                                (departmentLeadRoles[assignment.department] || []).includes(membership.role) ||
+                              organizationMemberCanFillDepartment(organizationMember, assignment.department, true);
                           })
                           .map((lead) => <option key={lead._id} value={lead._id}>{lead.name}</option>)}
                       </select>
@@ -661,8 +704,14 @@ export default function Board() {
                           : row))}
                       >
                         {workspaceMembers
-                          .filter((member) => member.department === assignment.department &&
-                            (departmentMemberRoles[assignment.department] || []).includes(member.role))
+                          .filter((member) => {
+                            const organizationMember = organizationMembers.find(
+                              (candidate) => String(candidate.user?._id) === String(member.user?._id)
+                            );
+                            return member.department === assignment.department &&
+                                (departmentMemberRoles[assignment.department] || []).includes(member.role) ||
+                              organizationMemberCanFillDepartment(organizationMember, assignment.department);
+                          })
                           .map((member) => member.user)
                           .filter(Boolean)
                           .map((member) => <option key={member._id} value={member._id}>{member.name}</option>)}
@@ -699,7 +748,11 @@ export default function Board() {
                   >
                     <option value="">Select department</option>
                     {(project.departmentAssignments || []).map((assignment) => (
+                      (canManageProject || (isAssignedOrganizationTeamLead &&
+                        organizationMembers.find((member) => String(member.user?._id) === String(myId))?.department === assignment.department &&
+                        String(assignment.teamLead?._id || assignment.teamLead) === String(myId))) && (
                       <option key={assignment.department} value={assignment.department}>{assignment.department}</option>
+                      )
                     ))}
                   </select>
                 </label>

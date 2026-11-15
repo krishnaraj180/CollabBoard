@@ -953,3 +953,109 @@ textarea { resize: vertical; width: 100%; }
   .sprint-dates { justify-items: start; white-space: normal; }
   .sprint-actions .btn { flex: 1 1 auto; }
 }
+
+/* ---------- organization administration ---------- */
+.organization-layout { display: grid; grid-template-columns: minmax(230px, 290px) minmax(0, 1fr); gap: 18px; align-items: start; }
+.organization-picker { position: sticky; top: 82px; display: grid; gap: 10px; }
+.organization-picker .section-head { margin: 0; }
+.organization-option { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border: 1px solid transparent; border-radius: 12px; background: transparent; color: inherit; text-align: left; }
+.organization-option:hover { background: var(--chip); }
+.organization-option.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 25%, var(--line)); color: var(--accent-ink); }
+.organization-option > span:last-child, .organization-person > div { display: grid; min-width: 0; gap: 2px; }
+.organization-option small, .organization-person span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.organization-mark { display: grid; place-items: center; width: 36px; height: 36px; flex: none; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-weight: 800; }
+.organization-create-form { display: grid; gap: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+.organization-create-form h3, .organization-invitations h3 { margin: 0; font-size: 15px; }
+.organization-content { display: grid; gap: 16px; min-width: 0; }
+.organization-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 14px; }
+.organization-title h2 { margin: 8px 0 4px; }
+.organization-title p { margin: 0; }
+.organization-counts { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.organization-profile-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; align-items: end; }
+.organization-profile-form .field:nth-child(3) { grid-column: 1 / -1; }
+.organization-profile-form .btn { justify-self: start; margin-bottom: 14px; }
+.organization-readonly { display: flex; flex-wrap: wrap; gap: 10px 24px; color: var(--muted); font-size: 13px; }
+.organization-location-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; align-items: end; margin-bottom: 14px; }
+.organization-location-form .field:nth-child(2) { grid-column: 1 / -1; }
+.organization-location-form .field { min-width: 0; }
+.organization-location-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.organization-locations { display: grid; gap: 8px; }
+.organization-location { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.organization-location-details { display: grid; min-width: 0; gap: 4px; }
+.organization-location-details span, .organization-location-details small { color: var(--muted); overflow-wrap: anywhere; }
+.organization-location-details small { font-size: 12px; }
+.organization-proposal-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; align-items: end; margin: 14px 0; }
+.organization-proposal-form > .field:nth-child(3), .organization-proposal-form > .btn { grid-column: 1 / -1; }
+.organization-proposal-quote { display: grid; grid-template-columns: minmax(0, 1fr) 100px; gap: 12px; }
+.organization-proposals { display: grid; gap: 10px; }
+.organization-proposal { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.organization-proposal-summary > div { display: grid; gap: 5px; }
+.organization-proposal-summary span, .organization-proposal-summary small { color: var(--muted); overflow-wrap: anywhere; }
+.organization-proposal-summary small { font-size: 12px; }
+.organization-proposal-decision { display: grid; gap: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+.organization-proposal-decision select[multiple] { min-height: 84px; }
+.organization-proposal-projects { display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid var(--line); }
+.organization-proposal-projects a { color: var(--accent); font-size: 13px; }
+.organization-members, .organization-departments, .organization-workspaces, .organization-workload { display: grid; gap: 10px; }
+.organization-member { display: grid; grid-template-columns: minmax(180px, 1.4fr) repeat(3, minmax(120px, 1fr)) auto; gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.organization-person { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.organization-person strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.organization-member .field { min-width: 0; margin: 0; }
+.organization-member .field > span:first-child { font-size: 11px; }
+.organization-member select { width: 100%; padding: 8px; font-size: 12px; }
+.organization-member-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.organization-two-column { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.organization-two-column > .box { min-width: 0; }
+.organization-invitations { display: grid; gap: 10px; margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); }
+.organization-invitation, .organization-department-heading, .organization-workspace { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.organization-invitation > div, .organization-department-heading > div { display: grid; min-width: 0; gap: 2px; }
+.organization-invitation span, .organization-department-heading span, .organization-workspace span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.organization-department { display: grid; gap: 10px; padding: 12px 0; border-top: 1px solid var(--line); }
+.organization-department .field { margin: 0; }
+.organization-link-form { display: flex; gap: 10px; margin-bottom: 12px; }
+.organization-link-form select { flex: 1; }
+.organization-workspace { padding: 10px 0; border-top: 1px solid var(--line); }
+.organization-workspace strong { flex: 1; }
+.organization-workload-card { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.1fr) minmax(220px, 1fr); gap: 16px; align-items: center; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.organization-workload-stats { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12px; color: var(--muted); }
+.organization-workload-stats strong { color: var(--ink); }
+.organization-capacity > div:first-child { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); }
+.organization-capacity .progress { margin: 6px 0 3px; }
+.organization-capacity small { color: var(--muted); font-size: 11px; }
+.organization-reports-note { margin: 12px 0 0; }
+.organization-permissions { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; margin-top: 12px; }
+.organization-permissions > div { display: grid; gap: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+.organization-permissions span { color: var(--muted); font-size: 12px; }
+.organization-empty-state { align-self: start; }
+.organization-empty-state h2 { margin-top: 0; }
+
+@media (max-width: 1100px) {
+  .organization-member { grid-template-columns: minmax(180px, 1fr) repeat(2, minmax(120px, 1fr)); }
+  .organization-member-actions { grid-column: 1 / -1; }
+  .organization-workload-card { grid-template-columns: 1fr 1fr; }
+  .organization-capacity { grid-column: 1 / -1; }
+}
+@media (max-width: 760px) {
+  .organization-layout, .organization-two-column { grid-template-columns: minmax(0, 1fr); }
+  .organization-picker { position: static; }
+  .organization-profile-form { grid-template-columns: minmax(0, 1fr); }
+  .organization-profile-form .field:nth-child(3) { grid-column: auto; }
+  .organization-location-form { grid-template-columns: minmax(0, 1fr); }
+  .organization-location-form .field:nth-child(2) { grid-column: auto; }
+  .organization-proposal-form { grid-template-columns: minmax(0, 1fr); }
+  .organization-proposal-form > .field:nth-child(3), .organization-proposal-form > .btn { grid-column: auto; }
+  .organization-proposal-quote { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .organization-location { align-items: flex-start; flex-direction: column; }
+  .organization-member { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .organization-person, .organization-member-actions { grid-column: 1 / -1; }
+  .organization-title { flex-direction: column; }
+  .organization-counts { white-space: normal; }
+}
+@media (max-width: 520px) {
+  .organization-member { grid-template-columns: minmax(0, 1fr); }
+  .organization-workload-card { grid-template-columns: minmax(0, 1fr); }
+  .organization-capacity { grid-column: auto; }
+  .organization-link-form { align-items: stretch; flex-direction: column; }
+  .organization-workspace { align-items: flex-start; flex-wrap: wrap; }
+  .organization-workspace strong { flex: 1 1 100%; }
+}
