@@ -38,10 +38,14 @@ export default function Workspace() {
     setLoading(true);
     setError("");
     try {
+      const channelsRequest = api(`/api/workspaces/${workspaceId}/channels`).catch((err) => {
+        if (err.status === 403) return { channels: [] };
+        throw err;
+      });
       const [ws, d, ch] = await Promise.all([
         api(`/api/workspaces/${workspaceId}`),
         api(`/api/workspaces/${workspaceId}/dashboard`),
-        api(`/api/workspaces/${workspaceId}/channels`),
+        channelsRequest,
       ]);
       setWorkspace(ws.workspace);
       setDash(d);
@@ -84,7 +88,9 @@ export default function Workspace() {
   }, [socket, workspaceId]);
 
   const isManager = dash && ["owner", "admin", "ceo", "managing_director"].includes(dash.myRole);
-  const canCreateProject = isManager || dash?.myRole === "project_manager";
+  const isCompanyLocation = Boolean(workspace?.organizationId);
+  const canCreateProject = !isCompanyLocation && (isManager || dash?.myRole === "project_manager" ||
+    ["organization_admin", "project_manager"].includes(dash?.myOrganizationRole));
 
   async function addProject(e) {
     e.preventDefault();
@@ -193,6 +199,7 @@ export default function Workspace() {
                   <button className="btn">Create project</button>
                 </form>
               </details>}
+              {isCompanyLocation && <p className="muted">Company projects are submitted by Business Management and assigned to locations by the CEO from <Link href="/app/organizations">Organization management</Link>.</p>}
 
               {projects.length === 0 && (
                 <div className="empty">{dash.projects.length === 0 ? "No projects yet. Create the first one above." : "No projects with this status."}</div>

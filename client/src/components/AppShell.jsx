@@ -43,6 +43,7 @@ const NAV_ICONS = {
   tasks: "M5 12l4 4 10-10M5 5h14M5 19h14",
   team: "M16 11a4 4 0 1 0-8 0M4 20a8 8 0 0 1 16 0",
   user: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0",
+  organization: "M3 21h18M5 21V7l7-4 7 4v14M9 10h1m4 0h1m-6 4h1m4 0h1m-6 4h1m4 0h1",
 };
 
 function Icon({ name }) {
@@ -153,6 +154,7 @@ export default function AppShell({ children }) {
 
         <nav className="nav-scroll">
           {item("/app", "All workspaces", pathname === "/app", "home")}
+          {item("/app/organizations", "Organizations", pathname.startsWith("/app/organizations"), "organization")}
           {base && (
             <>
               {item(base, "Dashboard", pathname === base, "dash")}

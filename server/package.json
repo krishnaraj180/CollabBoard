@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
-    "test": "jest --runInBand --detectOpenHandles --forceExit"
+    "test": "jest --runInBand --detectOpenHandles --forceExit",
+    "grant-super-admin": "node src/scripts/grantSuperAdmin.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -1,6 +1,7 @@
 const { z } = require("zod");
 const mongoose = require("mongoose");
 const Workspace = require("../models/Workspace");
+const Organization = require("../models/Organization");
 const Project = require("../models/Project");
 const Task = require("../models/Task");
 const Sprint = require("../models/Sprint");
@@ -9,7 +10,8 @@ const { PROJECT_STATUSES } = Project;
 const { WORKFLOW_STAGES } = Project;
 const { PRIORITIES } = Task;
 const { AppError, asyncHandler } = require("../utils/errors");
-const { requireMember, isManager, getMemberUserId, canAccessProject } = require("../utils/access");
+const { requireMember, memberOf, isManager, getMemberUserId, canAccessProject } = require("../utils/access");
+const { organizationMemberOf, canAccessOrganizationProject } = require("../utils/organizationAccess");
 const { emitToProjectWorkspace } = require("../sockets");
 const { notifyUsers } = require("../utils/notify");
 const { logActivity } = require("../utils/activity");
@@ -188,6 +190,18 @@ const DEPARTMENT_MEMBER_ROLES = {
   "HR Department": ["hr_manager", "hr_executive", "recruiter", "hr_employee"],
   "Project Management": ["project_manager"],
 };
+const ORGANIZATION_DEPARTMENT_ROLES = {
+  "Development Department": ["developer"],
+  "Frontend Team": ["developer"],
+  "Backend Team": ["developer"],
+  "QA Department": ["qa_tester"],
+};
+
+function organizationMemberCanFillDepartment(organization, userId, department) {
+  const member = organization?.members.find((item) => getMemberUserId(item) === String(userId));
+  return Boolean(member && member.department === department &&
+    (member.role === "team_lead" || ORGANIZATION_DEPARTMENT_ROLES[department]?.includes(member.role)));
+}
 
 function assertObjectId(id, label = "id") {
   if (!mongoose.isValidObjectId(id)) throw new AppError(`Invalid ${label}`, 400);
@@ -241,8 +255,15 @@ async function loadWorkspace(id, userId) {
   assertObjectId(id, "workspace id");
   const workspace = await Workspace.findById(id);
   if (!workspace) throw new AppError("Workspace not found", 404);
-  const membership = requireMember(workspace, userId);
-  return { workspace, membership };
+  const organization = workspace.organizationId ? await Organization.findById(workspace.organizationId) : null;
+  const organizationMembership = organization ? organizationMemberOf(organization, userId) : null;
+  const membership = memberOf(workspace, userId) || (
+    organizationMembership?.role === "organization_admin"
+      ? { user: userId, role: "viewer", companyWideAccess: true }
+      : null
+  );
+  if (!membership) throw new AppError("You do not have access to this workspace", 403);
+  return { workspace, membership, organization, organizationMembership };
 }
 
 /** Loads project + workspace and the caller's membership in one go. */
@@ -250,26 +271,34 @@ async function loadProject(req) {
   assertObjectId(req.params.id, "project id");
   const project = await Project.findById(req.params.id);
   if (!project) throw new AppError("Project not found", 404);
-  const { workspace, membership } = await loadWorkspace(project.workspace, req.user._id);
-  if (!canAccessProject(project, membership, req.user._id)) {
+  const { workspace, membership, organization, organizationMembership } = await loadWorkspace(project.workspace, req.user._id);
+  if (!canAccessProject(project, membership, req.user._id) &&
+      !canAccessOrganizationProject(project, organizationMembership, req.user._id, req.user.platformRole)) {
     throw new AppError("You are not assigned to this project or its current approval step", 403);
   }
-  return { project, workspace, membership };
+  return { project, workspace, membership, organization, organizationMembership };
 }
 
-function requireManager(membership) {
-  if (!isManager(membership.role)) {
+function requireManager(membership, organizationMembership = null) {
+  if (membership.companyWideAccess) {
+    throw new AppError("Company-wide CEO access is read-only for location projects", 403);
+  }
+  if (!isManager(membership.role) && organizationMembership?.role !== "organization_admin") {
     throw new AppError("Only workspace leadership can do this", 403);
   }
 }
 
-function canManageAssignedProject(project, membership, userId) {
-  return isManager(membership.role) ||
-    (membership.role === "project_manager" && String(project.projectManager?._id || project.projectManager) === String(userId));
+function canManageAssignedProject(project, membership, userId, organizationMembership = null) {
+  return !membership.companyWideAccess && (isManager(membership.role) || organizationMembership?.role === "organization_admin" ||
+    (["project_manager"].includes(membership.role) || organizationMembership?.role === "project_manager") &&
+      String(project.projectManager?._id || project.projectManager) === String(userId));
 }
 
-function requireProjectPlanner(project, membership, userId) {
-  if (!canManageAssignedProject(project, membership, userId)) {
+function requireProjectPlanner(project, membership, userId, organizationMembership = null) {
+  if (membership.companyWideAccess) {
+    throw new AppError("Company-wide CEO access is read-only for location projects", 403);
+  }
+  if (!canManageAssignedProject(project, membership, userId, organizationMembership)) {
     throw new AppError("Only workspace leadership or the assigned project manager can manage this project plan", 403);
   }
 }
@@ -327,8 +356,11 @@ async function notifyProjectStakeholders(io, workspace, project, actor, update) 
   });
 }
 
-function requireWritableMember(membership) {
-  if (membership.role === "viewer") {
+function requireWritableMember(membership, organizationMembership = null) {
+  if (membership.companyWideAccess) {
+    throw new AppError("Company-wide CEO access is read-only for location projects", 403);
+  }
+  if (membership.role === "viewer" || organizationMembership?.role === "viewer") {
     throw new AppError("Viewers have read-only access", 403);
   }
 }
@@ -365,16 +397,38 @@ function isAssignedToDepartments(project, userId, departments) {
   const expected = new Set(departments.map((department) => department.toLowerCase()));
   return project.departmentAssignments.some((assignment) =>
     expected.has(assignment.department.toLowerCase()) &&
-    (String(assignment.teamLead) === String(userId) ||
-      (assignment.members || []).some((memberId) => String(memberId) === String(userId)))
+    (String(assignment.teamLead?._id || assignment.teamLead) === String(userId) ||
+      (assignment.members || []).some((member) => String(member?._id || member) === String(userId)))
   );
 }
 
-function requireTaskWorkStage(project, membership, userId) {
+function organizationRoleCanWork(project, organizationMembership, userId) {
+  if (!organizationMembership) return false;
+  const stageRoles = {
+    design: ["team_lead"],
+    development: ["team_lead", "developer", "project_manager"],
+    bug_fixing: ["team_lead", "developer", "project_manager"],
+    qa_testing: ["team_lead", "qa_tester", "project_manager"],
+    delivery_review: ["project_manager"],
+  };
+  if (!stageRoles[project.workflowStage]?.includes(organizationMembership.role)) return false;
+  if (organizationMembership.role === "project_manager") return true;
+  const department = organizationMembership.department?.toLowerCase();
+  const allowedDepartments = project.workflowStage === "design"
+    ? ["design department"]
+    : project.workflowStage === "qa_testing"
+      ? ["qa department"]
+      : ["development department", "frontend team", "backend team"];
+  return allowedDepartments.includes(department) &&
+    isAssignedToDepartments(project, userId, [organizationMembership.department]);
+}
+
+function requireTaskWorkStage(project, membership, userId, organizationMembership = null) {
   const roles = TASK_STAGE_ROLES[project.workflowStage];
-  if (!roles) throw new AppError("Task changes are available during design, development, and bug fixing stages", 409);
-  if (isManager(membership.role) || membership.role === "project_manager") return;
+  if (!roles) throw new AppError("Task changes are not available during this project stage", 409);
+  if (isManager(membership.role) || membership.role === "project_manager" || organizationMembership?.role === "organization_admin") return;
   if (!roles.includes(membership.role)) {
+    if (organizationRoleCanWork(project, organizationMembership, userId)) return;
     throw new AppError(`Your role cannot edit tasks during ${workflowLabels[project.workflowStage]}`, 403);
   }
   const departments = project.workflowStage === "design"
@@ -382,6 +436,17 @@ function requireTaskWorkStage(project, membership, userId) {
     : ["Development Department", "Frontend Team", "Backend Team"];
   if (!isAssignedToDepartments(project, userId, departments)) {
     throw new AppError("You are not assigned to this project's active department", 403);
+  }
+}
+
+function canEditProjectTasks(project, membership, userId, organizationMembership = null) {
+  try {
+    requireWritableMember(membership, organizationMembership);
+    requireTaskWorkStage(project, membership, userId, organizationMembership);
+    return true;
+  } catch (error) {
+    if (error.status === 403 || error.status === 409) return false;
+    throw error;
   }
 }
 
@@ -422,17 +487,23 @@ const workflowLabels = {
   completed: "Project completed",
 };
 
-function assertWorkflowRole(membership, allowedRoles, project, userId, departments = []) {
-  if (!allowedRoles.includes(membership.role) && membership.role !== "owner") {
+function assertWorkflowRole(membership, allowedRoles, project, userId, departments = [], organizationMembership = null) {
+  if (membership.companyWideAccess) {
+    throw new AppError("Company-wide CEO access is read-only for location projects", 403);
+  }
+  const organizationAllowed = project.workflowStage === "project_setup" || project.workflowStage === "team_assignment"
+    ? organizationMembership?.role === "project_manager"
+    : organizationRoleCanWork(project, organizationMembership, userId);
+  if (!allowedRoles.includes(membership.role) && membership.role !== "owner" && !organizationAllowed) {
     throw new AppError(`This workflow step requires: ${allowedRoles.join(" or ")}`, 403);
   }
-  if (membership.role !== "owner" && departments.length && !isAssignedToDepartments(project, userId, departments)) {
+  if (membership.role !== "owner" && !organizationAllowed && departments.length && !isAssignedToDepartments(project, userId, departments)) {
     throw new AppError("You are not assigned to the department responsible for this workflow step", 403);
   }
 }
 
 const transitionWorkflow = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
   const transition = WORKFLOW_TRANSITIONS[project.workflowStage];
   const stageActions = project.workflowStage === "qa_testing"
     ? ["pass", "fail"]
@@ -444,7 +515,7 @@ const transitionWorkflow = asyncHandler(async (req, res) => {
   if (!transition || !stageActions.includes(req.body.action)) {
     throw new AppError(`Action is not valid during ${workflowLabels[project.workflowStage] || project.workflowStage}`, 409);
   }
-  assertWorkflowRole(membership, transition.roles, project, req.user._id, transition.departments);
+  assertWorkflowRole(membership, transition.roles, project, req.user._id, transition.departments, organizationMembership);
 
   if (project.workflowStage === "project_setup") {
     if (!project.scope.trim() || project.budget === null || !project.dueDate || !project.milestones.length) {
@@ -625,11 +696,15 @@ async function statsForProjects(projects) {
   }));
 }
 
-async function findAccessibleProjects(workspaceId, membership, userId) {
+async function findAccessibleProjects(workspaceId, membership, userId, organization = null, user = null) {
   const projects = await Project.find({ workspace: workspaceId })
     .populate("projectManager", USER_FIELDS)
     .sort({ createdAt: -1 });
-  return projects.filter((project) => canAccessProject(project, membership, userId));
+  const organizationMembership = organization ? organizationMemberOf(organization, userId) : null;
+  return projects.filter((project) =>
+    canAccessProject(project, membership, userId) ||
+    canAccessOrganizationProject(project, organizationMembership, userId, user?.platformRole)
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -637,15 +712,22 @@ async function findAccessibleProjects(workspaceId, membership, userId) {
 /* ------------------------------------------------------------------ */
 
 const list = asyncHandler(async (req, res) => {
-  const { membership } = await loadWorkspace(req.params.workspaceId, req.user._id);
-  const projects = await findAccessibleProjects(req.params.workspaceId, membership, req.user._id);
+  const { membership, organization } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  const projects = await findAccessibleProjects(req.params.workspaceId, membership, req.user._id, organization, req.user);
   res.json({ projects: await statsForProjects(projects) });
 });
 
 const create = asyncHandler(async (req, res) => {
-  const { workspace, membership } = await loadWorkspace(req.params.workspaceId, req.user._id);
-  requireWritableMember(membership);
-  if (!isManager(membership.role) && membership.role !== "project_manager") {
+  const { workspace, membership, organizationMembership } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  if (workspace.organizationId) {
+    throw new AppError("Company projects must be submitted as proposals and approved by the CEO", 403);
+  }
+  if (membership.companyWideAccess) {
+    throw new AppError("Submit a company project proposal for CEO approval before assigning it to locations", 403);
+  }
+  requireWritableMember(membership, organizationMembership);
+  if (!isManager(membership.role) && membership.role !== "project_manager" &&
+      !["organization_admin", "project_manager"].includes(organizationMembership?.role)) {
     throw new AppError("Only workspace leadership or project managers can create a project", 403);
   }
   if (req.body.status === "completed") {
@@ -657,7 +739,7 @@ const create = asyncHandler(async (req, res) => {
     description: req.body.description || "",
     status: req.body.status || "active",
     dueDate: parseDate(req.body.dueDate) || undefined,
-    projectManager: membership.role === "project_manager" ? req.user._id : null,
+    projectManager: membership.role === "project_manager" || organizationMembership?.role === "project_manager" ? req.user._id : null,
     owner: req.user._id,
     createdBy: req.user._id,
   });
@@ -682,8 +764,10 @@ const create = asyncHandler(async (req, res) => {
 });
 
 const getBoard = asyncHandler(async (req, res) => {
-  const { project, membership } = await loadProject(req);
+  const { project, workspace, membership, organization, organizationMembership } = await loadProject(req);
   await ensureBacklogColumn(project);
+  await workspace.populate("members.user", USER_FIELDS);
+  if (organization) await organization.populate("members.user", USER_FIELDS);
   await project.populate([
     { path: "projectManager", select: USER_FIELDS },
     { path: "workflowHistory.actor", select: "name avatarColor" },
@@ -697,19 +781,46 @@ const getBoard = asyncHandler(async (req, res) => {
     .populate("sprint", "name goal startDate endDate status")
     .populate("dependencies", "title columnId startDate dueDate progress")
     .sort({ order: 1, createdAt: 1 });
+  const workspaceUserIds = new Set(workspace.members.map((member) => getMemberUserId(member)));
+  const organizationMembers = (organization?.members || [])
+    .filter((member) => member.user && workspaceUserIds.has(String(member.user._id)))
+    .map((member) => ({
+      user: member.user,
+      role: member.role,
+      department: member.department,
+      title: member.title,
+    }));
+  const organizationDepartments = (organization?.departments || [])
+    .filter((department) => department.active)
+    .map((department) => ({ name: department.name, positions: department.positions }));
+  const departments = [
+    ...(workspace.organization?.departments || []),
+    ...organizationDepartments.filter((department) =>
+      !(workspace.organization?.departments || []).some((existing) => existing.name === department.name)
+    ),
+  ];
+  const projectManagers = [
+    ...workspace.members.filter((member) => member.role === "project_manager").map((member) => member.user),
+    ...organizationMembers.filter((member) => member.role === "project_manager").map((member) => member.user),
+  ].filter((user, index, list) => user && list.findIndex((other) => String(other._id) === String(user._id)) === index);
   res.json({
     project: { ...project.toObject(), overdue: projectOverdue(project) },
     tasks,
     stats: computeStats(project, tasks),
-    myRole: membership.role,
-    canManageProject: canManageAssignedProject(project, membership, req.user._id),
+    myRole: membership.companyWideAccess ? "viewer" : membership.role,
+    canManageProject: !membership.companyWideAccess && canManageAssignedProject(project, membership, req.user._id, organizationMembership),
+    myOrganizationRole: membership.companyWideAccess ? null : organizationMembership?.role || null,
+    canEditTasks: !membership.companyWideAccess && canEditProjectTasks(project, membership, req.user._id, organizationMembership),
+    organizationMembers,
+    organizationDepartments: departments,
+    projectManagers,
   });
 });
 
 const updateProject = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  const canManageProject = canManageAssignedProject(project, membership, req.user._id);
-  if (!canManageProject) requireManager(membership);
+  const { project, workspace, membership, organization, organizationMembership } = await loadProject(req);
+  const canManageProject = canManageAssignedProject(project, membership, req.user._id, organizationMembership);
+  if (!canManageProject) requireManager(membership, organizationMembership);
   const io = req.app.get("io");
   const previousStatus = project.status;
   const changes = [];
@@ -738,13 +849,17 @@ const updateProject = asyncHandler(async (req, res) => {
     changes.push(`set status to ${req.body.status.replace("_", " ")}`);
   }
   if (req.body.projectManagerId !== undefined) {
-    requireManager(membership);
+    requireManager(membership, organizationMembership);
     if (req.body.projectManagerId !== null) {
       assertObjectId(req.body.projectManagerId, "project manager id");
       const selectedManager = workspace.members.find((member) =>
-        getMemberUserId(member) === req.body.projectManagerId && member.role === "project_manager"
+        getMemberUserId(member) === req.body.projectManagerId &&
+          (member.role === "project_manager" ||
+            organization?.members.some((orgMember) =>
+              getMemberUserId(orgMember) === req.body.projectManagerId && orgMember.role === "project_manager"
+            ))
       );
-      if (!selectedManager) throw new AppError("Project managers must have the project manager workspace role", 400);
+      if (!selectedManager) throw new AppError("Project managers must belong to this workspace and have a project manager role", 400);
     }
     const nextManagerId = req.body.projectManagerId;
     if (String(project.projectManager?._id || project.projectManager || "") !== String(nextManagerId || "")) {
@@ -754,7 +869,8 @@ const updateProject = asyncHandler(async (req, res) => {
   }
   if (["scope", "budget", "milestones"].some((key) => req.body[key] !== undefined)) {
     if (project.workflowStage !== "project_setup" ||
-      (membership.role !== "project_manager" && !isManager(membership.role))) {
+      (membership.role !== "project_manager" && !isManager(membership.role) &&
+        !["project_manager", "organization_admin"].includes(organizationMembership?.role))) {
       throw new AppError("Only the assigned project manager can edit project planning details during project setup", 403);
     }
     if (req.body.scope !== undefined) project.scope = req.body.scope;
@@ -763,13 +879,15 @@ const updateProject = asyncHandler(async (req, res) => {
   }
   if (req.body.departmentAssignments !== undefined) {
     if (project.workflowStage !== "team_assignment" ||
-      (membership.role !== "project_manager" && !isManager(membership.role))) {
+      (membership.role !== "project_manager" && !isManager(membership.role) &&
+        !["project_manager", "organization_admin"].includes(organizationMembership?.role))) {
       throw new AppError("Only the assigned project manager can assign teams during the team assignment stage", 403);
     }
     const workspaceMembers = new Map(workspace.members.map((member) => [getMemberUserId(member), member]));
     project.departmentAssignments = req.body.departmentAssignments.map((assignment) => {
       const { department, teamLeadId, memberIds } = assignment;
-      if (!workspace.organization.departments.some((item) => item.name === department)) {
+      if (!workspace.organization.departments.some((item) => item.name === department) &&
+          !organization?.departments.some((item) => item.name === department && item.active)) {
         throw new AppError(`Unknown department: ${department}`, 400);
       }
       const lead = workspaceMembers.get(teamLeadId);
@@ -786,14 +904,18 @@ const updateProject = asyncHandler(async (req, res) => {
         "Project Management": ["project_manager"],
       };
       const allowedLeadRoles = departmentLeadRoles[department] || [];
-      if (!lead || !allowedLeadRoles.includes(lead.role)) {
+      if (!lead || (!allowedLeadRoles.includes(lead.role) &&
+          !organizationMemberCanFillDepartment(organization, teamLeadId, department))) {
         throw new AppError(`Choose a team lead with the ${department} role`, 400);
       }
       const members = [...new Set(memberIds)];
       if (members.some((id) => !workspaceMembers.has(id))) {
         throw new AppError("Assigned team members must belong to this workspace", 400);
       }
-      if (members.some((id) => !DEPARTMENT_MEMBER_ROLES[department]?.includes(workspaceMembers.get(id).role))) {
+      if (members.some((id) =>
+        !DEPARTMENT_MEMBER_ROLES[department]?.includes(workspaceMembers.get(id).role) &&
+        !organizationMemberCanFillDepartment(organization, id, department)
+      )) {
         throw new AppError(`Team members assigned to ${department} must have a matching department role`, 400);
       }
       return { department, teamLead: teamLeadId, members };
@@ -823,8 +945,13 @@ const updateProject = asyncHandler(async (req, res) => {
 });
 
 const addProjectTeamMembers = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  if (!canManageAssignedProject(project, membership, req.user._id)) {
+  const { project, workspace, membership, organization, organizationMembership } = await loadProject(req);
+  const leadsAssignedDepartment = organizationMembership?.role === "team_lead" &&
+    project.departmentAssignments.some((item) =>
+      item.department === organizationMembership.department &&
+      String(item.teamLead?._id || item.teamLead) === String(req.user._id)
+    );
+  if (!canManageAssignedProject(project, membership, req.user._id, organizationMembership) && !leadsAssignedDepartment) {
     throw new AppError("Only workspace leadership or the assigned project manager can add team members", 403);
   }
   if (!["design", "development", "bug_fixing"].includes(project.workflowStage)) {
@@ -841,10 +968,12 @@ const addProjectTeamMembers = asyncHandler(async (req, res) => {
     assertObjectId(id, "member id");
     const member = workspaceMembers.get(id);
     if (!member) throw new AppError("Team members must belong to this workspace", 400);
-    if (member.department !== department) {
+    const orgMember = organization?.members.find((item) => getMemberUserId(item) === id);
+    if (member.department !== department && orgMember?.department !== department) {
       throw new AppError(`Assign the member to ${department} in workspace settings first`, 400);
     }
-    if (!DEPARTMENT_MEMBER_ROLES[department]?.includes(member.role)) {
+    if (!DEPARTMENT_MEMBER_ROLES[department]?.includes(member.role) &&
+        !organizationMemberCanFillDepartment(organization, id, department)) {
       throw new AppError(`Team members assigned to ${department} must have a matching department role`, 400);
     }
 
@@ -889,8 +1018,8 @@ const addProjectTeamMembers = asyncHandler(async (req, res) => {
 });
 
 const removeProject = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  requireManager(membership);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireManager(membership, organizationMembership);
   const io = req.app.get("io");
   await Task.deleteMany({ project: project._id });
   await Sprint.deleteMany({ project: project._id });
@@ -926,9 +1055,9 @@ function notifyAssignees(io, { workspace, project, task, actor, ids, title, type
 }
 
 const createTask = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  requireWritableMember(membership);
-  requireTaskWorkStage(project, membership, req.user._id);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireWritableMember(membership, organizationMembership);
+  requireTaskWorkStage(project, membership, req.user._id, organizationMembership);
   const io = req.app.get("io");
   const columnId = req.body.columnId || project.columns[0]?.id || "todo";
   if (!project.columns.some((c) => c.id === columnId)) {
@@ -993,9 +1122,9 @@ const createTask = asyncHandler(async (req, res) => {
 });
 
 const updateTask = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  requireWritableMember(membership);
-  requireTaskWorkStage(project, membership, req.user._id);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireWritableMember(membership, organizationMembership);
+  requireTaskWorkStage(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.taskId, "task id");
   const io = req.app.get("io");
   const task = await Task.findOne({ _id: req.params.taskId, project: project._id });
@@ -1119,9 +1248,9 @@ const updateTask = asyncHandler(async (req, res) => {
 });
 
 const reorderTasks = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  requireWritableMember(membership);
-  requireTaskWorkStage(project, membership, req.user._id);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireWritableMember(membership, organizationMembership);
+  requireTaskWorkStage(project, membership, req.user._id, organizationMembership);
 
   const ids = req.body.moves.map((move) => {
     assertObjectId(move.taskId, "task id");
@@ -1244,8 +1373,8 @@ const listSprints = asyncHandler(async (req, res) => {
 });
 
 const createSprint = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  requireProjectPlanner(project, membership, req.user._id);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   const startDate = parseDate(req.body.startDate);
   const endDate = parseDate(req.body.endDate);
   assertSprintDateRange(startDate, endDate);
@@ -1272,8 +1401,8 @@ const createSprint = asyncHandler(async (req, res) => {
 });
 
 const updateSprint = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  requireProjectPlanner(project, membership, req.user._id);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.sprintId, "sprint id");
   const sprint = await Sprint.findOne({ _id: req.params.sprintId, project: project._id });
   if (!sprint) throw new AppError("Sprint not found", 404);
@@ -1301,8 +1430,8 @@ const updateSprint = asyncHandler(async (req, res) => {
 });
 
 const startSprint = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  requireProjectPlanner(project, membership, req.user._id);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.sprintId, "sprint id");
   const sprint = await Sprint.findOne({ _id: req.params.sprintId, project: project._id });
   if (!sprint) throw new AppError("Sprint not found", 404);
@@ -1331,8 +1460,8 @@ const startSprint = asyncHandler(async (req, res) => {
 });
 
 const completeSprint = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  requireProjectPlanner(project, membership, req.user._id);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.sprintId, "sprint id");
   const sprint = await Sprint.findOne({ _id: req.params.sprintId, project: project._id });
   if (!sprint) throw new AppError("Sprint not found", 404);
@@ -1359,8 +1488,8 @@ const listMilestones = asyncHandler(async (req, res) => {
 });
 
 const createMilestone = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  requireProjectPlanner(project, membership, req.user._id);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   const dueDate = parseDate(req.body.dueDate);
   project.projectMilestones.push({
     title: req.body.title,
@@ -1382,8 +1511,8 @@ const createMilestone = asyncHandler(async (req, res) => {
 });
 
 const updateMilestone = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  requireProjectPlanner(project, membership, req.user._id);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.milestoneId, "milestone id");
   const milestone = project.projectMilestones.id(req.params.milestoneId);
   if (!milestone) throw new AppError("Milestone not found", 404);
@@ -1408,8 +1537,8 @@ const updateMilestone = asyncHandler(async (req, res) => {
 });
 
 const completeMilestone = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  requireProjectPlanner(project, membership, req.user._id);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.milestoneId, "milestone id");
   const milestone = project.projectMilestones.id(req.params.milestoneId);
   if (!milestone) throw new AppError("Milestone not found", 404);
@@ -1429,8 +1558,8 @@ const completeMilestone = asyncHandler(async (req, res) => {
 });
 
 const removeMilestone = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  requireProjectPlanner(project, membership, req.user._id);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.milestoneId, "milestone id");
   const milestone = project.projectMilestones.id(req.params.milestoneId);
   if (!milestone) throw new AppError("Milestone not found", 404);
@@ -1450,14 +1579,14 @@ const removeMilestone = asyncHandler(async (req, res) => {
 });
 
 const removeTask = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  requireWritableMember(membership);
-  requireTaskWorkStage(project, membership, req.user._id);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireWritableMember(membership, organizationMembership);
+  requireTaskWorkStage(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.taskId, "task id");
   const existing = await Task.findOne({ _id: req.params.taskId, project: project._id });
   if (!existing) throw new AppError("Task not found", 404);
   const isCreator = String(existing.createdBy) === String(req.user._id);
-  if (!isCreator && !canManageAssignedProject(project, membership, req.user._id)) {
+  if (!isCreator && !canManageAssignedProject(project, membership, req.user._id, organizationMembership)) {
     throw new AppError("Only the creator, assigned project manager, or workspace admin can delete this task", 403);
   }
   await Task.updateMany(
@@ -1487,8 +1616,8 @@ const removeTask = asyncHandler(async (req, res) => {
 });
 
 const addComment = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  requireWritableMember(membership);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireWritableMember(membership, organizationMembership);
   assertObjectId(req.params.taskId, "task id");
   const task = await Task.findOne({ _id: req.params.taskId, project: project._id });
   if (!task) throw new AppError("Task not found", 404);
@@ -1526,14 +1655,15 @@ const addComment = asyncHandler(async (req, res) => {
 });
 
 const removeComment = asyncHandler(async (req, res) => {
-  const { project, workspace, membership } = await loadProject(req);
-  requireWritableMember(membership);
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireWritableMember(membership, organizationMembership);
   assertObjectId(req.params.taskId, "task id");
   const task = await Task.findOne({ _id: req.params.taskId, project: project._id });
   if (!task) throw new AppError("Task not found", 404);
   const comment = task.comments.id(req.params.commentId);
   if (!comment) throw new AppError("Comment not found", 404);
-  if (String(comment.author) !== String(req.user._id) && !canManageAssignedProject(project, membership, req.user._id)) {
+  if (String(comment.author) !== String(req.user._id) &&
+      !canManageAssignedProject(project, membership, req.user._id, organizationMembership)) {
     throw new AppError("You can only delete your own comments", 403);
   }
   comment.deleteOne();
@@ -1561,9 +1691,9 @@ const projectActivity = asyncHandler(async (req, res) => {
 /* ------------------------------------------------------------------ */
 
 const myTasks = asyncHandler(async (req, res) => {
-  const { workspace } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  const { workspace, organization } = await loadWorkspace(req.params.workspaceId, req.user._id);
   const membership = workspace.members.find((member) => getMemberUserId(member) === String(req.user._id));
-  const accessibleProjects = await findAccessibleProjects(workspace._id, membership, req.user._id);
+  const accessibleProjects = await findAccessibleProjects(workspace._id, membership, req.user._id, organization, req.user);
   const taskQuery = {
     workspace: workspace._id,
     project: { $in: accessibleProjects.map((project) => project._id) },
@@ -1589,8 +1719,8 @@ const myTasks = asyncHandler(async (req, res) => {
 });
 
 const dashboard = asyncHandler(async (req, res) => {
-  const { workspace, membership } = await loadWorkspace(req.params.workspaceId, req.user._id);
-  const projects = await findAccessibleProjects(workspace._id, membership, req.user._id);
+  const { workspace, membership, organization, organizationMembership } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  const projects = await findAccessibleProjects(workspace._id, membership, req.user._id, organization, req.user);
   const projectIds = projects.map((project) => project._id);
   const [tasks, activity] = await Promise.all([
     Task.find({ project: { $in: projectIds } }).select("project columnId dueDate assignees priority"),
@@ -1641,12 +1771,13 @@ const dashboard = asyncHandler(async (req, res) => {
     })),
     activity,
     myRole: membership.role,
+    myOrganizationRole: organizationMembership?.role || null,
   });
 });
 
 const workspaceActivity = asyncHandler(async (req, res) => {
-  const { workspace, membership } = await loadWorkspace(req.params.workspaceId, req.user._id);
-  const projects = await findAccessibleProjects(workspace._id, membership, req.user._id);
+  const { workspace, membership, organization } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  const projects = await findAccessibleProjects(workspace._id, membership, req.user._id, organization, req.user);
   const query = {
     workspace: workspace._id,
     project: { $in: projects.map((project) => project._id) },

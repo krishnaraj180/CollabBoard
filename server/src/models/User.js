@@ -7,6 +7,7 @@ const userSchema = new mongoose.Schema(
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     passwordHash: { type: String, required: true, select: false },
     avatarColor: { type: String, default: "#2563eb" },
+    platformRole: { type: String, enum: ["super_admin"], default: null },
     lastSeenAt: { type: Date, default: Date.now },
     tokenVersion: { type: Number, default: 0 },
     loginFailures: { type: Number, default: 0, select: false },
@@ -32,6 +33,7 @@ userSchema.methods.toPublic = function toPublic() {
     name: this.name,
     email: this.email,
     avatarColor: this.avatarColor,
+    platformRole: this.platformRole,
     lastSeenAt: this.lastSeenAt,
   };
 };

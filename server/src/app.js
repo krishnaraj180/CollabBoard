@@ -7,6 +7,7 @@ const { errorHandler, AppError } = require("./utils/errors");
 const { requireAuth } = require("./middleware/auth");
 const authRoutes = require("./routes/auth");
 const workspaceRoutes = require("./routes/workspaces");
+const organizationRoutes = require("./routes/organizations");
 const projectRoutes = require("./routes/projects");
 const channelRoutes = require("./routes/channels");
 const notificationController = require("./controllers/notificationController");
@@ -36,6 +37,7 @@ function createApp() {
 
   app.use("/api/auth", authRoutes);
   app.use("/api/workspaces", requireAuth, workspaceRoutes);
+  app.use("/api/organizations", requireAuth, organizationRoutes);
   app.use("/api/projects", requireAuth, projectRoutes);
   app.use("/api/channels", requireAuth, channelRoutes);
   app.get("/api/notifications", requireAuth, notificationController.list);
