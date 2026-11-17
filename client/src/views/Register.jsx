@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import AuthLayout from "../components/AuthLayout";
@@ -16,12 +16,13 @@ function strength(pw) {
 }
 
 export default function Register() {
-  const { user, loading, register } = useAuth();
+  const { user, loading, error: authError, register } = useAuth();
   const router = useRouter();
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const submitting = useRef(false);
 
   useEffect(() => {
     if (!loading && user) router.replace("/app");
@@ -29,7 +30,8 @@ export default function Register() {
 
   async function onSubmit(e) {
     e.preventDefault();
-    if (loading) return;
+    if (loading || submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     setError("");
     try {
@@ -37,6 +39,7 @@ export default function Register() {
     } catch (err) {
       setError(err.details?.[0]?.message ? `${err.message}: ${err.details[0].message}` : err.message);
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -55,7 +58,7 @@ export default function Register() {
       }
     >
       <form onSubmit={onSubmit} className="auth-form-body">
-        {error && <div className="auth-error-banner" role="alert">{error}</div>}
+        {(error || authError) && <div className="auth-error-banner" role="alert">{error || authError}</div>}
         <div className="form-group">
           <label>Full Name</label>
           <input required minLength={2} maxLength={80} autoComplete="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Alex Rivera" />

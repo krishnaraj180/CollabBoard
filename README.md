@@ -14,7 +14,7 @@ Real-time team collaboration: group chat, presence, file sharing, notifications,
                                       MongoDB + /uploads
 ```
 
-- **Auth:** register/login issue a JWT only in an httpOnly cookie. REST and Socket.IO authenticate from that cookie; the browser does not store a bearer token in local storage. Login can use a session cookie or remember the session for 30 days. State-changing requests with a browser Origin are restricted to configured `CLIENT_ORIGIN` values.
+- **Auth:** register/login issue a JWT only in an HttpOnly cookie. REST and Socket.IO authenticate from that cookie; the browser does not store a bearer token in local storage. “Remember me” gives the JWT and cookie a 30-day lifetime. When unchecked, the cookie is a browser-session cookie and the JWT lifetime is `JWT_EXPIRES_IN` (7 days by default). Changing a password preserves the current session policy; logout, password changes, password resets and session revocation invalidate prior JWTs. State-changing requests with a browser Origin are restricted to configured `CLIENT_ORIGIN` values.
 - **Permissions:** every workspace, project, task, channel, message, and file route checks membership and role on the server. Organization routes use separate organization membership and RBAC checks; organization roles do not bypass the requirement for workspace membership on project resources. Socket events do the same before joining a channel.
 - **Realtime:** the API writes to MongoDB first, then emits `task:updated`, `chat:message`, `presence:update`, and `notification:new`. A second browser does not need a refresh. Chat history is loaded from MongoDB after reconnect.
 - **Files:** multipart upload through the message route, stored under `server/uploads`, served only to authenticated users.
@@ -148,7 +148,7 @@ Base URL: `/api`. Authentication uses the `cb_token` HttpOnly cookie.
 | --- | --- | --- |
 | POST | `/auth/register` | `{ name, email, password }` |
 | POST | `/auth/login` | `{ email, password, rememberMe? }`; `rememberMe` defaults to `true` |
-| POST | `/auth/logout` | Clears cookie |
+| POST | `/auth/logout` | Clears cookie and invalidates existing sessions |
 | PATCH | `/auth/me` | `{ name?, avatarColor? }` |
 | POST | `/auth/password` | `{ currentPassword, newPassword }`, ends other sessions |
 | GET | `/auth/me` | Current user |

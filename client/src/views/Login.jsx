@@ -1,19 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import AuthLayout from "../components/AuthLayout";
 import { useAuth } from "../context/AuthContext";
 
 export default function Login() {
-  const { user, loading, login } = useAuth();
+  const { user, loading, error: authError, login } = useAuth();
   const router = useRouter();
   const [form, setForm] = useState({ email: "", password: "" });
   const [remember, setRemember] = useState(true);
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const submitting = useRef(false);
 
   useEffect(() => {
     if (!loading && user) router.replace("/app");
@@ -21,7 +22,8 @@ export default function Login() {
 
   async function onSubmit(e) {
     e.preventDefault();
-    if (loading) return;
+    if (loading || submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     setError("");
     try {
@@ -29,6 +31,7 @@ export default function Login() {
     } catch (err) {
       setError(err.message || "Invalid email or password. Please verify your credentials.");
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -42,7 +45,7 @@ export default function Login() {
     >
       <div className="auth-form-body">
         <form onSubmit={onSubmit} className="auth-email-form">
-          {error && <div className="auth-error-banner" role="alert">{error}</div>}
+          {(error || authError) && <div className="auth-error-banner" role="alert">{error || authError}</div>}
 
           <div className="form-group">
             <label htmlFor="auth-email">Work Email</label>
@@ -56,7 +59,7 @@ export default function Login() {
             <div className="field-header"><label htmlFor="auth-password">Password</label><Link className="field-link" href="/forgot-password">Forgot password?</Link></div>
             <div className="input-with-icon">
               <svg className="field-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
-              <input id="auth-password" type={show ? "text" : "password"} autoComplete="current-password" required value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="••••••••" />
+              <input id="auth-password" type={show ? "text" : "password"} autoComplete="current-password" required maxLength={72} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="••••••••" />
               <button type="button" className="password-toggle-btn" onClick={() => setShow((v) => !v)} aria-label={show ? "Hide password" : "Show password"}>{show ? "Hide" : "Show"}</button>
             </div>
           </div>
