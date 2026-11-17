@@ -10,6 +10,10 @@ function required(name) {
 }
 
 const isTest = process.env.NODE_ENV === "test";
+const cookieSameSite = (process.env.COOKIE_SAME_SITE || "lax").toLowerCase();
+if (!["lax", "strict", "none"].includes(cookieSameSite)) {
+  throw new Error("COOKIE_SAME_SITE must be lax, strict, or none");
+}
 
 const env = {
   nodeEnv: process.env.NODE_ENV || "development",
@@ -24,6 +28,7 @@ const env = {
   jwtSecret: isTest ? process.env.JWT_SECRET || "test-secret-do-not-use" : required("JWT_SECRET"),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "7d",
   sessionMaxAgeMs: Number(process.env.SESSION_MAX_AGE_DAYS || 7) * 24 * 60 * 60 * 1000,
+  cookieSameSite,
   passwordResetUrl: process.env.PASSWORD_RESET_URL || "http://localhost:3000/reset-password",
   mailFrom: process.env.MAIL_FROM || "CollabBoard <no-reply@example.com>",
   resendApiKey: process.env.RESEND_API_KEY || "",

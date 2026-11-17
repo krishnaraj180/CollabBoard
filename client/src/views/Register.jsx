@@ -16,7 +16,7 @@ function strength(pw) {
 }
 
 export default function Register() {
-  const { user, register } = useAuth();
+  const { user, loading, register } = useAuth();
   const router = useRouter();
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [show, setShow] = useState(false);
@@ -24,16 +24,16 @@ export default function Register() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (user) router.replace("/app");
-  }, [user, router]);
+    if (!loading && user) router.replace("/app");
+  }, [loading, user, router]);
 
   async function onSubmit(e) {
     e.preventDefault();
+    if (loading) return;
     setBusy(true);
     setError("");
     try {
       await register({ ...form, name: form.name.trim(), email: form.email.trim() });
-      router.push("/app");
     } catch (err) {
       setError(err.details?.[0]?.message ? `${err.message}: ${err.details[0].message}` : err.message);
     } finally {
@@ -78,7 +78,7 @@ export default function Register() {
           )}
           <span className="hint">At least 8 characters.</span>
         </div>
-        <button className="auth-submit-btn" disabled={busy}>{busy ? "Creating account…" : "Create Workspace Account →"}</button>
+        <button className="auth-submit-btn" disabled={busy || loading}>{loading ? "Checking session…" : busy ? "Creating account…" : "Create Workspace Account →"}</button>
       </form>
     </AuthLayout>
   );

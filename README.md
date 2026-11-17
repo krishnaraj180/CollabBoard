@@ -7,14 +7,14 @@ Real-time team collaboration: group chat, presence, file sharing, notifications,
 ## Architecture
 
 ```
-[Next.js client] --REST cookies/JWT--> [Express API]
+[Next.js client] --REST HttpOnly cookie--> [Express API]
        |                                    |
-       +-------- Socket.IO (JWT) -----------+
+       +-------- Socket.IO (cookie) --------+
                                             |
                                       MongoDB + /uploads
 ```
 
-- **Auth:** register/login issue a JWT in an httpOnly cookie and in the JSON body (Socket.IO handshake). Logout clears the cookie.
+- **Auth:** register/login issue a JWT only in an httpOnly cookie. REST and Socket.IO authenticate from that cookie; the browser does not store a bearer token in local storage. Login can use a session cookie or remember the session for 30 days. State-changing requests with a browser Origin are restricted to configured `CLIENT_ORIGIN` values.
 - **Permissions:** every workspace, project, task, channel, message, and file route checks membership and role on the server. Organization routes use separate organization membership and RBAC checks; organization roles do not bypass the requirement for workspace membership on project resources. Socket events do the same before joining a channel.
 - **Realtime:** the API writes to MongoDB first, then emits `task:updated`, `chat:message`, `presence:update`, and `notification:new`. A second browser does not need a refresh. Chat history is loaded from MongoDB after reconnect.
 - **Files:** multipart upload through the message route, stored under `server/uploads`, served only to authenticated users.
@@ -126,7 +126,7 @@ Open http://localhost:3000. The web app sends `/api` requests to the Express API
 
 Registration creates a MongoDB user record with a hashed password. Logging in verifies that record and creates a session; workspace and collaboration content is written to MongoDB by the API. Data persistence depends on the configured MongoDB instance. Never commit real environment files or production secrets.
 
-For a public deployment, set `CLIENT_ORIGIN` to the frontend origin, `MONGODB_URI` and `JWT_SECRET` on the API, `API_URL` for the Next.js server-side API rewrite, and `NEXT_PUBLIC_SOCKET_URL` to the browser-reachable Socket.IO URL. Use HTTPS and set `secure` production cookies. `NEXT_PUBLIC_SOCKET_URL` is embedded at build time.
+For a public deployment, set `CLIENT_ORIGIN` to the frontend origin, `MONGODB_URI` and `JWT_SECRET` on the API, `API_URL` for the Next.js server-side API rewrite, and `NEXT_PUBLIC_SOCKET_URL` to the browser-reachable Socket.IO URL. Use HTTPS and secure production cookies. If the frontend and API are on different sites, set `COOKIE_SAME_SITE=none`; this requires HTTPS. `NEXT_PUBLIC_SOCKET_URL` is embedded at build time.
 
 Never commit `server/.env` or `client/.env.local`; both are gitignored. The checked-in `.env.example` files contain local-development values only.
 
@@ -140,14 +140,14 @@ Never commit `server/.env` or `client/.env.local`; both are gitignored. The chec
 
 ## API
 
-Base URL: `/api`. Cookie or `Authorization: Bearer <token>`.
+Base URL: `/api`. Authentication uses the `cb_token` HttpOnly cookie.
 
 ### Auth
 
 | Method | Path | Notes |
 | --- | --- | --- |
 | POST | `/auth/register` | `{ name, email, password }` |
-| POST | `/auth/login` | `{ email, password }` |
+| POST | `/auth/login` | `{ email, password, rememberMe? }`; `rememberMe` defaults to `true` |
 | POST | `/auth/logout` | Clears cookie |
 | PATCH | `/auth/me` | `{ name?, avatarColor? }` |
 | POST | `/auth/password` | `{ currentPassword, newPassword }`, ends other sessions |

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, getToken } from "../api";
+import { api } from "../api";
 import AppShell from "../components/AppShell";
 import { Avatar } from "../components/ui";
 import { formatDateTime } from "../lib/format";
@@ -75,15 +75,9 @@ export default function Chat() {
     form.append("body", body);
     [...files].forEach((f) => form.append("files", f));
     try {
-      await fetch(`/api/channels/${channelId}/messages`, {
+      await api(`/api/channels/${channelId}/messages`, {
         method: "POST",
         body: form,
-        credentials: "include",
-        headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {},
-      }).then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Send failed");
-        return data;
       });
       setBody("");
       setFiles([]);

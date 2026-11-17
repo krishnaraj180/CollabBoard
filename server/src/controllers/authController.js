@@ -4,6 +4,7 @@ const { AppError, asyncHandler } = require("../utils/errors");
 const { signToken, setAuthCookie, clearAuthCookie, readToken, verifyToken } = require("../utils/tokens");
 const crypto = require("crypto");
 const { sendPasswordResetEmail } = require("../utils/mailer");
+const { env } = require("../config/env");
 
 const registerSchema = z.object({
   body: z.object({
@@ -17,6 +18,7 @@ const loginSchema = z.object({
   body: z.object({
     email: z.string().email(),
     password: z.string().min(1),
+    rememberMe: z.boolean().optional().default(true),
   }),
 });
 
@@ -57,12 +59,12 @@ const register = asyncHandler(async (req, res) => {
   });
   const token = signToken(user._id, user.tokenVersion);
   setAuthCookie(res, token);
-  res.status(201).json({ user: user.toPublic(), token });
+  res.status(201).json({ user: user.toPublic() });
 });
 
 const login = asyncHandler(async (req, res) => {
   const email = req.body.email.trim().toLowerCase();
-  const { password } = req.body;
+  const { password, rememberMe } = req.body;
   const user = await User.findOne({ email }).select("+passwordHash +loginFailures +lockedUntil");
   const locked = user?.lockedUntil && user.lockedUntil > new Date();
   if (!user || locked || !(await user.matchesPassword(password))) {
@@ -77,9 +79,9 @@ const login = asyncHandler(async (req, res) => {
   user.lockedUntil = null;
   user.lastSeenAt = new Date();
   await user.save();
-  const token = signToken(user._id, user.tokenVersion);
-  setAuthCookie(res, token);
-  res.json({ user: user.toPublic(), token });
+  const token = signToken(user._id, user.tokenVersion, rememberMe ? "30d" : env.jwtExpiresIn);
+  setAuthCookie(res, token, { maxAge: rememberMe ? 30 * 24 * 60 * 60 * 1000 : null });
+  res.json({ user: user.toPublic() });
 });
 
 const logout = asyncHandler(async (req, res) => {
@@ -121,7 +123,7 @@ const changePassword = asyncHandler(async (req, res) => {
   await user.save();
   const token = signToken(user._id, user.tokenVersion);
   setAuthCookie(res, token);
-  res.json({ ok: true, token });
+  res.json({ ok: true });
 });
 
 const requestPasswordReset = asyncHandler(async (req, res) => {

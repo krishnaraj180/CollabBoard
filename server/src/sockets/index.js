@@ -53,9 +53,8 @@ async function findAuthorizedChannel(channelId, userId) {
 function attachSockets(io) {
   io.use(async (socket, next) => {
     try {
-      const headerToken = socket.handshake.auth?.token;
       const cookies = parseCookie(socket.handshake.headers.cookie);
-      const token = headerToken || cookies[COOKIE];
+      const token = cookies[COOKIE];
       if (!token) return next(new Error("Authentication required"));
       const payload = jwt.verify(token, env.jwtSecret);
       const user = await User.findById(payload.sub);

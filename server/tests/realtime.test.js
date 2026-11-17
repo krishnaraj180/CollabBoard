@@ -6,6 +6,13 @@ function waitFor(socket, event) {
   return new Promise((resolve) => socket.once(event, resolve));
 }
 
+function connectWithCookie(port, cookie) {
+  return clientIo(`http://127.0.0.1:${port}`, {
+    extraHeaders: { Cookie: cookie.split(";")[0] },
+    transports: ["websocket"],
+  });
+}
+
 async function expectNoEvent(socket, event, action) {
   let received = false;
   const listener = () => {
@@ -41,8 +48,6 @@ describe("realtime + persistence", () => {
     const c = await register(app, { email: "c@example.com", name: "Unaffiliated lead" });
     const cookieA = a.headers["set-cookie"][0];
     const cookieB = b.headers["set-cookie"][0];
-    const tokenA = a.body.token;
-    const tokenB = b.body.token;
 
     const ws = await request(app).post("/api/workspaces").set("Cookie", cookieA).send({ name: "Live" });
     const workspaceId = ws.body.workspace._id;
@@ -69,9 +74,9 @@ describe("realtime + persistence", () => {
       .send({ name: "private", memberIds: [] });
 
     const port = server.address().port;
-    const sA = clientIo(`http://127.0.0.1:${port}`, { auth: { token: tokenA }, transports: ["websocket"] });
-    const sB = clientIo(`http://127.0.0.1:${port}`, { auth: { token: tokenB }, transports: ["websocket"] });
-    const sC = clientIo(`http://127.0.0.1:${port}`, { auth: { token: c.body.token }, transports: ["websocket"] });
+    const sA = connectWithCookie(port, cookieA);
+    const sB = connectWithCookie(port, cookieB);
+    const sC = connectWithCookie(port, c.headers["set-cookie"][0]);
     const readyA = waitFor(sA, "presence:snapshot");
     const readyB = waitFor(sB, "presence:snapshot");
     const readyC = waitFor(sC, "presence:snapshot");
@@ -124,7 +129,7 @@ describe("realtime + persistence", () => {
     expect(posted.status).toBe(201);
 
     sA.disconnect();
-    const sA2 = clientIo(`http://127.0.0.1:${port}`, { auth: { token: tokenA }, transports: ["websocket"] });
+    const sA2 = connectWithCookie(port, cookieA);
     await waitFor(sA2, "connect");
     const history = await request(app).get(`/api/channels/${general._id}/messages`).set("Cookie", cookieA);
     expect(history.body.messages.some((m) => m.body === "hello after login")).toBe(true);
@@ -178,14 +183,8 @@ describe("realtime + persistence", () => {
     await advanceProjectToDevelopment(app, ownerCookie, unassignedProject.body.project._id, devAssignment);
 
     const port = server.address().port;
-    const assignedSocket = clientIo(`http://127.0.0.1:${port}`, {
-      auth: { token: assignedManager.body.token },
-      transports: ["websocket"],
-    });
-    const otherSocket = clientIo(`http://127.0.0.1:${port}`, {
-      auth: { token: otherManager.body.token },
-      transports: ["websocket"],
-    });
+    const assignedSocket = connectWithCookie(port, assignedManager.headers["set-cookie"][0]);
+    const otherSocket = connectWithCookie(port, otherManager.headers["set-cookie"][0]);
     const assignedReady = waitFor(assignedSocket, "presence:snapshot");
     const otherReady = waitFor(otherSocket, "presence:snapshot");
     await Promise.all([waitFor(assignedSocket, "connect"), waitFor(otherSocket, "connect")]);
