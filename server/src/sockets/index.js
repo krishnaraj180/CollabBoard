@@ -63,6 +63,7 @@ function attachSockets(io) {
         return next(new Error("Session has ended"));
       }
       socket.user = user;
+      socket.data.authExpiresAt = payload.exp ? payload.exp * 1000 : null;
       next();
     } catch {
       next(new Error("Invalid session"));
@@ -71,11 +72,42 @@ function attachSockets(io) {
 
   io.on("connection", async (socket) => {
     const user = socket.user;
+    let workspaces = [];
+    let sessionExpiryTimer;
+    const enforceSessionExpiry = () => {
+      const expiresAt = socket.data.authExpiresAt;
+      if (!expiresAt) return;
+      const remaining = expiresAt - Date.now();
+      if (remaining <= 0) {
+        socket.emit("auth:session-expired");
+        socket.disconnect(true);
+        return;
+      }
+      sessionExpiryTimer = setTimeout(enforceSessionExpiry, Math.min(remaining, 2147483647));
+    };
+    socket.on("disconnect", async () => {
+      clearTimeout(sessionExpiryTimer);
+      const remaining = removeSocket(user._id, socket.id);
+      if (remaining === 0) {
+        await User.findByIdAndUpdate(user._id, { lastSeenAt: new Date() });
+        workspaces.forEach((ws) => {
+          io.to(`workspace:${ws._id}`).emit("presence:update", {
+            userId: String(user._id),
+            online: false,
+            name: user.name,
+          });
+        });
+      }
+    });
     addSocket(user._id, socket.id);
+    enforceSessionExpiry();
+    socket.join(`user:${user._id}`);
     user.lastSeenAt = new Date();
     await user.save();
+    if (!socket.connected) return;
 
-    const workspaces = await Workspace.find({ "members.user": user._id }).select("_id members");
+    workspaces = await Workspace.find({ "members.user": user._id }).select("_id members");
+    if (!socket.connected) return;
     workspaces.forEach((ws) => socket.join(`workspace:${ws._id}`));
 
     const workspaceIds = workspaces.map((ws) => ws._id);
@@ -83,9 +115,15 @@ function attachSockets(io) {
       members: user._id,
       workspace: { $in: workspaceIds },
     }).select("_id");
+    if (!socket.connected) return;
+    const currentUser = await User.findById(user._id).select("tokenVersion");
+    if (!socket.connected) return;
+    if (!currentUser || currentUser.tokenVersion !== user.tokenVersion) {
+      socket.emit("auth:session-expired");
+      socket.disconnect(true);
+      return;
+    }
     channels.forEach((ch) => socket.join(`channel:${ch._id}`));
-
-    socket.join(`user:${user._id}`);
 
     workspaces.forEach((ws) => {
       io.to(`workspace:${ws._id}`).emit("presence:update", {
@@ -132,19 +170,6 @@ function attachSockets(io) {
       }
     });
 
-    socket.on("disconnect", async () => {
-      const remaining = removeSocket(user._id, socket.id);
-      if (remaining === 0) {
-        await User.findByIdAndUpdate(user._id, { lastSeenAt: new Date() });
-        workspaces.forEach((ws) => {
-          io.to(`workspace:${ws._id}`).emit("presence:update", {
-            userId: String(user._id),
-            online: false,
-            name: user.name,
-          });
-        });
-      }
-    });
   });
 }
 

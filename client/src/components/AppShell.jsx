@@ -55,7 +55,7 @@ function Icon({ name }) {
 }
 
 export default function AppShell({ children }) {
-  const { user, loading, logout } = useAuth();
+  const { user, loading, error: authError, logout } = useAuth();
   const { disconnected, notifications, setNotifications } = useRealtime();
   const { workspaceId, workspaces, projects, channels } = useNav();
   const [open, setOpen] = useState(false);
@@ -63,6 +63,7 @@ export default function AppShell({ children }) {
   const [profileMenu, setProfileMenu] = useState(false);
   const [logoutOpen, setLogoutOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
   const [theme, toggleTheme] = useTheme();
   const router = useRouter();
   const pathname = usePathname() || "";
@@ -98,13 +99,17 @@ export default function AppShell({ children }) {
   }
 
   async function confirmLogout() {
+    if (loggingOut) return;
     setLoggingOut(true);
+    setLogoutError("");
     try {
       await logout();
       router.replace("/login");
+      setLogoutOpen(false);
+    } catch (err) {
+      setLogoutError(err.message || "Unable to sign out. Please try again.");
     } finally {
       setLoggingOut(false);
-      setLogoutOpen(false);
     }
   }
 
@@ -202,7 +207,7 @@ export default function AppShell({ children }) {
                 <span className="muted">{user.email}</span>
               </span>
             </Link>
-            <button className="sidebar-signout" onClick={() => setLogoutOpen(true)} aria-label="Sign out" title="Sign out">
+            <button className="sidebar-signout" onClick={() => { setLogoutError(""); setLogoutOpen(true); }} aria-label="Sign out" title="Sign out">
               <span aria-hidden="true">↪</span>
             </button>
           </div>
@@ -215,6 +220,7 @@ export default function AppShell({ children }) {
             You are offline or the realtime connection dropped. Changes still save; live updates resume on reconnect.
           </div>
         )}
+        {authError && <div className="banner offline" role="alert">{authError}</div>}
         <header className="appbar">
           <button className="btn secondary icon-btn menu-btn" onClick={() => setMenu(true)} aria-label="Open menu">
             ☰
@@ -290,7 +296,7 @@ export default function AppShell({ children }) {
                     <span className="profile-menu-icon">◎</span>
                     <span><strong>Profile & settings</strong><small>Manage your account</small></span>
                   </Link>
-                  <button className="profile-menu-item danger-item" onClick={() => setLogoutOpen(true)} role="menuitem">
+                  <button className="profile-menu-item danger-item" onClick={() => { setLogoutError(""); setLogoutOpen(true); }} role="menuitem">
                     <span className="profile-menu-icon">↪</span>
                     <span><strong>Sign out</strong><small>End this session</small></span>
                   </button>
@@ -308,6 +314,7 @@ export default function AppShell({ children }) {
             <div className="confirm-icon" aria-hidden="true">↪</div>
             <h2 id="logout-title">Sign out of CollabBoard?</h2>
             <p className="muted">You’ll need to sign in again to access your workspaces and notifications.</p>
+            {logoutError && <div className="error" role="alert">{logoutError}</div>}
             <div className="confirm-actions">
               <button className="btn secondary" onClick={() => setLogoutOpen(false)} disabled={loggingOut}>Cancel</button>
               <button className="btn danger" onClick={confirmLogout} disabled={loggingOut}>{loggingOut ? "Signing out…" : "Sign out"}</button>

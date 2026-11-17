@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "../api";
 import AppShell from "../components/AppShell";
@@ -16,6 +16,10 @@ export default function Account() {
   const [pw, setPw] = useState({ currentPassword: "", newPassword: "" });
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
+  const [revokingSessions, setRevokingSessions] = useState(false);
+  const inFlight = useRef({ profile: false, password: false, revoke: false });
 
   function flash(message) {
     setNotice(message);
@@ -25,33 +29,56 @@ export default function Account() {
 
   async function saveProfile(e) {
     e.preventDefault();
+    if (inFlight.current.profile) return;
+    inFlight.current.profile = true;
+    setSavingProfile(true);
+    setError("");
+    setNotice("");
     try {
       const data = await api("/api/auth/me", { method: "PATCH", body: { name: profile.name.trim(), avatarColor: profile.avatarColor } });
       setUser(data.user);
       flash("Profile saved");
     } catch (err) {
       setError(err.message);
+    } finally {
+      inFlight.current.profile = false;
+      setSavingProfile(false);
     }
   }
 
   async function savePassword(e) {
     e.preventDefault();
+    if (inFlight.current.password) return;
+    inFlight.current.password = true;
+    setSavingPassword(true);
+    setError("");
+    setNotice("");
     try {
       await api("/api/auth/password", { method: "POST", body: pw });
       setPw({ currentPassword: "", newPassword: "" });
       flash("Password changed. Other devices were signed out.");
     } catch (err) {
       setError(err.details?.[0]?.message ? `${err.message}: ${err.details[0].message}` : err.message);
+    } finally {
+      inFlight.current.password = false;
+      setSavingPassword(false);
     }
   }
 
   async function signOutAllDevices() {
+    if (inFlight.current.revoke) return;
+    inFlight.current.revoke = true;
+    setRevokingSessions(true);
+    setError("");
     try {
       await api("/api/auth/sessions/revoke", { method: "POST" });
       setUser(null);
       router.replace("/login");
     } catch (err) {
       setError(err.message);
+    } finally {
+      inFlight.current.revoke = false;
+      setRevokingSessions(false);
     }
   }
 
@@ -106,7 +133,7 @@ export default function Account() {
                   ))}
                 </div>
               </div>
-              <button className="btn">Save profile</button>
+              <button className="btn" disabled={savingProfile}>{savingProfile ? "Saving…" : "Save profile"}</button>
             </form>
           </section>
 
@@ -122,11 +149,11 @@ export default function Account() {
                 <input type="password" autoComplete="new-password" required minLength={8} maxLength={72} value={pw.newPassword} onChange={(e) => setPw({ ...pw, newPassword: e.target.value })} />
                 <span className="hint">At least 8 characters. Changing it signs out your other devices.</span>
               </label>
-              <button className="btn">Update password</button>
+              <button className="btn" disabled={savingPassword}>{savingPassword ? "Updating…" : "Update password"}</button>
             </form>
             <div className="security-action">
               <div><strong>Sign out all devices</strong><span className="hint">End every active session, including this one.</span></div>
-              <button type="button" className="btn secondary" onClick={signOutAllDevices}>Sign out everywhere</button>
+              <button type="button" className="btn secondary" onClick={signOutAllDevices} disabled={revokingSessions}>{revokingSessions ? "Signing out…" : "Sign out everywhere"}</button>
             </div>
           </section>
         </div>

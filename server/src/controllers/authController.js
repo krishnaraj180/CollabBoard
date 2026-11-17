@@ -1,10 +1,18 @@
 const { z } = require("zod");
 const User = require("../models/User");
 const { AppError, asyncHandler } = require("../utils/errors");
-const { signToken, setAuthCookie, clearAuthCookie, readToken, verifyToken } = require("../utils/tokens");
+const {
+  signToken,
+  setAuthCookie,
+  clearAuthCookie,
+  readToken,
+  verifyToken,
+  SESSION_POLICIES,
+  sessionCookieMaxAge,
+} = require("../utils/tokens");
+const { emitToUser } = require("../sockets");
 const crypto = require("crypto");
 const { sendPasswordResetEmail } = require("../utils/mailer");
-const { env } = require("../config/env");
 
 const registerSchema = z.object({
   body: z.object({
@@ -17,7 +25,7 @@ const registerSchema = z.object({
 const loginSchema = z.object({
   body: z.object({
     email: z.string().email(),
-    password: z.string().min(1),
+    password: z.string().min(1).max(72),
     rememberMe: z.boolean().optional().default(true),
   }),
 });
@@ -46,8 +54,15 @@ function palette(name) {
   return colors[hash];
 }
 
+function notifySessionChange(req, res, userId) {
+  const io = req.app.get("io");
+  if (!io || !userId) return;
+  res.once("finish", () => emitToUser(io, userId, "auth:session-changed"));
+}
+
 const register = asyncHandler(async (req, res) => {
-  const { name, email, password } = req.body;
+  const { name, password } = req.body;
+  const email = req.body.email.trim().toLowerCase();
   const existing = await User.findOne({ email });
   if (existing) throw new AppError("Email already registered", 409);
   const passwordHash = await User.hashPassword(password);
@@ -79,19 +94,24 @@ const login = asyncHandler(async (req, res) => {
   user.lockedUntil = null;
   user.lastSeenAt = new Date();
   await user.save();
-  const token = signToken(user._id, user.tokenVersion, rememberMe ? "30d" : env.jwtExpiresIn);
-  setAuthCookie(res, token, { maxAge: rememberMe ? 30 * 24 * 60 * 60 * 1000 : null });
+  const sessionPolicy = rememberMe ? SESSION_POLICIES.REMEMBERED : SESSION_POLICIES.BROWSER;
+  const token = signToken(user._id, user.tokenVersion, sessionPolicy);
+  setAuthCookie(res, token, { maxAge: sessionCookieMaxAge(sessionPolicy) });
   res.json({ user: user.toPublic() });
 });
 
 const logout = asyncHandler(async (req, res) => {
   const token = readToken(req);
   if (token) {
+    let payload;
     try {
-      const payload = verifyToken(token);
-      await User.findByIdAndUpdate(payload.sub, { $inc: { tokenVersion: 1 } });
+      payload = verifyToken(token);
     } catch {
-      // already invalid
+      // An already-invalid token still needs its cookie cleared.
+    }
+    if (payload) {
+      await User.findByIdAndUpdate(payload.sub, { $inc: { tokenVersion: 1 } });
+      notifySessionChange(req, res, payload.sub);
     }
   }
   clearAuthCookie(res);
@@ -121,8 +141,12 @@ const changePassword = asyncHandler(async (req, res) => {
   // Ending every other session: old tokens carry the previous version number.
   user.tokenVersion += 1;
   await user.save();
-  const token = signToken(user._id, user.tokenVersion);
-  setAuthCookie(res, token);
+  const sessionPolicy = Object.values(SESSION_POLICIES).includes(req.auth?.sessionPolicy)
+    ? req.auth.sessionPolicy
+    : SESSION_POLICIES.STANDARD;
+  const token = signToken(user._id, user.tokenVersion, sessionPolicy);
+  setAuthCookie(res, token, { maxAge: sessionCookieMaxAge(sessionPolicy) });
+  notifySessionChange(req, res, user._id);
   res.json({ ok: true });
 });
 
@@ -154,12 +178,15 @@ const resetPassword = asyncHandler(async (req, res) => {
   user.lockedUntil = null;
   user.tokenVersion += 1;
   await user.save();
+  clearAuthCookie(res);
+  notifySessionChange(req, res, user._id);
   res.json({ ok: true });
 });
 
 const revokeSessions = asyncHandler(async (req, res) => {
   await User.findByIdAndUpdate(req.user._id, { $inc: { tokenVersion: 1 } });
   clearAuthCookie(res);
+  notifySessionChange(req, res, req.user._id);
   res.json({ ok: true });
 });
 

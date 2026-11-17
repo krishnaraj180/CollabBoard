@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import AuthLayout from "../components/AuthLayout";
 import { api } from "../api";
@@ -12,6 +12,7 @@ export default function ResetPassword() {
   const [done, setDone] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const submitting = useRef(false);
 
   useEffect(() => {
     setToken(new URLSearchParams(window.location.search).get("token") || "");
@@ -19,10 +20,12 @@ export default function ResetPassword() {
 
   async function submit(e) {
     e.preventDefault();
+    if (submitting.current) return;
     if (password !== confirm) {
       setError("Passwords do not match.");
       return;
     }
+    submitting.current = true;
     setBusy(true);
     setError("");
     try {
@@ -31,6 +34,7 @@ export default function ResetPassword() {
     } catch (err) {
       setError(err.message);
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }

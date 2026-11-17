@@ -1,3 +1,6 @@
+export const AUTH_EXPIRED_EVENT = "collabboard:auth-expired";
+export const SESSION_CHECK_EVENT = "collabboard:session-check";
+
 export async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (!(options.body instanceof FormData) && options.body && !headers["Content-Type"]) {
@@ -17,6 +20,9 @@ export async function api(path, options = {}) {
     const err = new Error(data.error || "Request failed");
     err.status = res.status;
     err.details = data.details;
+    if (res.status === 401 && path !== "/api/auth/login" && typeof window !== "undefined") {
+      window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+    }
     throw err;
   }
   return data;

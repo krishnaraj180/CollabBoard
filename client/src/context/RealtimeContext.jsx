@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
+import { AUTH_EXPIRED_EVENT, SESSION_CHECK_EVENT } from "../api";
 import { useAuth } from "./AuthContext";
 
 const RealtimeContext = createContext(null);
@@ -36,7 +37,18 @@ export function RealtimeProvider({ children }) {
     setSocket(next);
     next.on("connect", () => setSocketDown(false));
     next.on("disconnect", () => setSocketDown(true));
-    next.on("connect_error", () => setSocketDown(true));
+    next.on("connect_error", (error) => {
+      setSocketDown(true);
+      if (["Authentication required", "Invalid session", "Session has ended", "User no longer exists"].includes(error.message)) {
+        window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+      }
+    });
+    next.on("auth:session-changed", () => {
+      window.dispatchEvent(new Event(SESSION_CHECK_EVENT));
+    });
+    next.on("auth:session-expired", () => {
+      window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+    });
     next.on("presence:snapshot", ({ onlineUserIds: ids }) => setOnlineUserIds(ids || []));
     next.on("presence:update", ({ userId, online }) => {
       setOnlineUserIds((current) => {

@@ -1,6 +1,8 @@
 const request = require("supertest");
+const jwt = require("jsonwebtoken");
 const { io: clientIo } = require("socket.io-client");
 const { startDb, stopDb, clearDb, createTestApp, register, advanceProjectToDevelopment } = require("./helpers");
+const { env } = require("../src/config/env");
 
 function waitFor(socket, event) {
   return new Promise((resolve) => socket.once(event, resolve));
@@ -224,5 +226,42 @@ describe("realtime + persistence", () => {
 
     assignedSocket.disconnect();
     otherSocket.disconnect();
+  });
+
+  test("password changes notify connected sessions and require a fresh cookie", async () => {
+    const account = await register(app, { password: "password12" });
+    const oldCookie = account.headers["set-cookie"][0];
+    const port = server.address().port;
+    const socket = connectWithCookie(port, oldCookie);
+    await Promise.all([waitFor(socket, "connect"), waitFor(socket, "presence:snapshot")]);
+
+    const sessionChanged = waitFor(socket, "auth:session-changed");
+    const changed = await request(app)
+      .post("/api/auth/password")
+      .set("Cookie", oldCookie)
+      .send({ currentPassword: "password12", newPassword: "newpassword1" });
+
+    expect(changed.status).toBe(200);
+    await sessionChanged;
+    expect((await request(app).get("/api/auth/me").set("Cookie", oldCookie)).status).toBe(401);
+    expect((await request(app).get("/api/auth/me").set("Cookie", changed.headers["set-cookie"][0])).status).toBe(200);
+    socket.disconnect();
+  });
+
+  test("socket sessions disconnect when their JWT expires", async () => {
+    const account = await register(app);
+    const token = jwt.sign(
+      { sub: String(account.body.user._id), ver: 0, sessionPolicy: "browser" },
+      env.jwtSecret,
+      { expiresIn: "1s" }
+    );
+    const port = server.address().port;
+    const socket = connectWithCookie(port, `cb_token=${token}`);
+    const expired = waitFor(socket, "auth:session-expired");
+
+    await waitFor(socket, "connect");
+    await expired;
+    expect(socket.connected).toBe(false);
+    socket.disconnect();
   });
 });

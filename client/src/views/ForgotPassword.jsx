@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import AuthLayout from "../components/AuthLayout";
 import { api } from "../api";
@@ -10,9 +10,12 @@ export default function ForgotPassword() {
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const submitting = useRef(false);
 
   async function submit(e) {
     e.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     setError("");
     try {
@@ -21,6 +24,7 @@ export default function ForgotPassword() {
     } catch (err) {
       setError(err.message);
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
