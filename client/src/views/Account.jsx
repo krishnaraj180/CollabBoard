@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, setToken } from "../api";
+import { api } from "../api";
 import AppShell from "../components/AppShell";
 import { Avatar } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
@@ -37,8 +37,7 @@ export default function Account() {
   async function savePassword(e) {
     e.preventDefault();
     try {
-      const data = await api("/api/auth/password", { method: "POST", body: pw });
-      if (data.token) setToken(data.token);
+      await api("/api/auth/password", { method: "POST", body: pw });
       setPw({ currentPassword: "", newPassword: "" });
       flash("Password changed. Other devices were signed out.");
     } catch (err) {
@@ -49,7 +48,6 @@ export default function Account() {
   async function signOutAllDevices() {
     try {
       await api("/api/auth/sessions/revoke", { method: "POST" });
-      setToken(null);
       setUser(null);
       router.replace("/login");
     } catch (err) {

@@ -7,7 +7,7 @@ import AuthLayout from "../components/AuthLayout";
 import { useAuth } from "../context/AuthContext";
 
 export default function Login() {
-  const { user, login } = useAuth();
+  const { user, loading, login } = useAuth();
   const router = useRouter();
   const [form, setForm] = useState({ email: "", password: "" });
   const [remember, setRemember] = useState(true);
@@ -16,16 +16,16 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (user) router.replace("/app");
-  }, [user, router]);
+    if (!loading && user) router.replace("/app");
+  }, [loading, user, router]);
 
   async function onSubmit(e) {
     e.preventDefault();
+    if (loading) return;
     setBusy(true);
     setError("");
     try {
-      await login({ ...form, email: form.email.trim() });
-      router.push("/app");
+      await login({ ...form, email: form.email.trim(), rememberMe: remember });
     } catch (err) {
       setError(err.message || "Invalid email or password. Please verify your credentials.");
     } finally {
@@ -65,8 +65,8 @@ export default function Login() {
             <label className="checkbox-label"><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /><span>Remember for 30 days</span></label>
           </div>
 
-          <button type="submit" className="auth-submit-btn" disabled={busy}>
-            {busy ? <span className="auth-btn-spinner"><span className="spinner-dot" /> Authenticating…</span> : <span>Sign In to CollabBoard &rarr;</span>}
+          <button type="submit" className="auth-submit-btn" disabled={busy || loading}>
+            {loading ? <span>Checking session…</span> : busy ? <span className="auth-btn-spinner"><span className="spinner-dot" /> Authenticating…</span> : <span>Sign In to CollabBoard &rarr;</span>}
           </button>
         </form>
         <p className="auth-help-note">Need access to a workspace? <a href="mailto:workspace-admin@collabboard.app">Contact your workspace admin</a>.</p>

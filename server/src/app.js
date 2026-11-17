@@ -5,6 +5,7 @@ const cookieParser = require("cookie-parser");
 const { env } = require("./config/env");
 const { errorHandler, AppError } = require("./utils/errors");
 const { requireAuth } = require("./middleware/auth");
+const { validateOrigin } = require("./middleware/validateOrigin");
 const authRoutes = require("./routes/auth");
 const workspaceRoutes = require("./routes/workspaces");
 const organizationRoutes = require("./routes/organizations");
@@ -28,6 +29,7 @@ function createApp() {
       credentials: true,
     })
   );
+  app.use(validateOrigin);
   app.use(express.json({ limit: "1mb" }));
   app.use(cookieParser());
 

@@ -2,7 +2,6 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
-import { getToken } from "../api";
 import { useAuth } from "./AuthContext";
 
 const RealtimeContext = createContext(null);
@@ -32,7 +31,6 @@ export function RealtimeProvider({ children }) {
       return undefined;
     }
     const next = io(process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5000", {
-      auth: { token: getToken() },
       withCredentials: true,
     });
     setSocket(next);

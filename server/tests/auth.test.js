@@ -15,6 +15,7 @@ describe("auth", () => {
     const created = await register(app);
     expect(created.status).toBe(201);
     expect(created.body.user.email).toBe("krishna@example.com");
+    expect(created.body.token).toBeUndefined();
     expect(created.headers["set-cookie"]).toBeDefined();
 
     const login = await request(app).post("/api/auth/login").send({
@@ -33,6 +34,39 @@ describe("auth", () => {
 
     const after = await request(app).get("/api/auth/me").set("Cookie", cookie);
     expect(after.status).toBe(401);
+  });
+
+  test("remember me controls login-cookie persistence without returning a token", async () => {
+    await register(app);
+
+    const remembered = await request(app).post("/api/auth/login").send({
+      email: "krishna@example.com",
+      password: "password12",
+      rememberMe: true,
+    });
+    expect(remembered.status).toBe(200);
+    expect(remembered.body.token).toBeUndefined();
+    expect(remembered.headers["set-cookie"][0]).toContain("Max-Age=2592000");
+
+    const sessionOnly = await request(app).post("/api/auth/login").send({
+      email: "krishna@example.com",
+      password: "password12",
+      rememberMe: false,
+    });
+    expect(sessionOnly.status).toBe(200);
+    expect(sessionOnly.headers["set-cookie"][0]).not.toContain("Max-Age=");
+  });
+
+  test("rejects state-changing requests from an untrusted browser origin", async () => {
+    const created = await register(app);
+    const cookie = created.headers["set-cookie"][0];
+    const response = await request(app)
+      .post("/api/auth/logout")
+      .set("Cookie", cookie)
+      .set("Origin", "https://untrusted.example");
+
+    expect(response.status).toBe(403);
+    expect((await request(app).get("/api/auth/me").set("Cookie", cookie)).status).toBe(200);
   });
 
   test("rejects invalid credentials and payloads", async () => {
