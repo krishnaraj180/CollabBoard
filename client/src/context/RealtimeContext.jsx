@@ -35,7 +35,10 @@ export function RealtimeProvider({ children }) {
       withCredentials: true,
     });
     setSocket(next);
-    next.on("connect", () => setSocketDown(false));
+    next.on("connect", () => {
+      setSocketDown(false);
+      window.dispatchEvent(new Event("collabboard:realtime-connected"));
+    });
     next.on("disconnect", () => setSocketDown(true));
     next.on("connect_error", (error) => {
       setSocketDown(true);
@@ -58,7 +61,7 @@ export function RealtimeProvider({ children }) {
         return [...set];
       });
     });
-    next.on("notification:new", (note) => setNotifications((n) => [note, ...n].slice(0, 40)));
+    next.on("notification:new", (note) => setNotifications((n) => n.some((item) => String(item._id || item.id) === String(note._id || note.id)) ? n : [note, ...n].slice(0, 40)));
     return () => next.close();
   }, [user]);
 

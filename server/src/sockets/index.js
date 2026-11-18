@@ -71,6 +71,7 @@ function attachSockets(io) {
         await session.save();
       }
       socket.user = user;
+      socket.data.sessionId = payload.sid || null;
       socket.data.authExpiresAt = payload.exp ? payload.exp * 1000 : null;
       next();
     } catch {
@@ -82,6 +83,7 @@ function attachSockets(io) {
     const user = socket.user;
     let workspaces = [];
     let sessionExpiryTimer;
+    let sessionValidationTimer;
     const enforceSessionExpiry = () => {
       const expiresAt = socket.data.authExpiresAt;
       if (!expiresAt) return;
@@ -95,6 +97,7 @@ function attachSockets(io) {
     };
     socket.on("disconnect", async () => {
       clearTimeout(sessionExpiryTimer);
+      clearInterval(sessionValidationTimer);
       const remaining = removeSocket(user._id, socket.id);
       if (remaining === 0) {
         await User.findByIdAndUpdate(user._id, { lastSeenAt: new Date() });
@@ -141,7 +144,28 @@ function attachSockets(io) {
       });
     });
 
-    socket.emit("presence:snapshot", { onlineUserIds: onlineIds() });
+    const visibleUserIds = new Set(workspaces.flatMap((workspace) => workspace.members.map(getMemberUserId)));
+    socket.emit("presence:snapshot", { onlineUserIds: onlineIds().filter((id) => visibleUserIds.has(String(id))) });
+
+    sessionValidationTimer = setInterval(async () => {
+      try {
+        const currentUser = await User.findById(user._id).select("tokenVersion");
+        if (!currentUser || currentUser.tokenVersion !== user.tokenVersion) {
+          socket.emit("auth:session-expired");
+          socket.disconnect(true);
+          return;
+        }
+        if (socket.data.sessionId) {
+          const session = await Session.findOne({ user: user._id, sidHash: crypto.createHash("sha256").update(socket.data.sessionId).digest("hex") }).select("_id");
+          if (!session) {
+            socket.emit("auth:session-expired");
+            socket.disconnect(true);
+          }
+        }
+      } catch {
+        // A transient database error should not disconnect a healthy socket.
+      }
+    }, 30000);
 
     socket.on("channel:join", async (channelId, ack) => {
       try {

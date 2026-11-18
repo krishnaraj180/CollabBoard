@@ -22,6 +22,7 @@ export default function Chat() {
   const [loading, setLoading] = useState(true);
   const scroller = useRef(null);
   const fileInput = useRef(null);
+  const typingTimer = useRef(null);
 
   async function load() {
     setLoading(true);
@@ -42,6 +43,9 @@ export default function Chat() {
 
   useEffect(() => {
     load();
+    function recover() { load(); }
+    window.addEventListener("collabboard:realtime-connected", recover);
+    return () => window.removeEventListener("collabboard:realtime-connected", recover);
   }, [channelId]);
 
   useEffect(() => {
@@ -54,19 +58,30 @@ export default function Chat() {
     function onMessage({ message }) {
       if (String(message.channel) === channelId || String(message.channel?._id) === channelId) {
         setMessages((list) => (list.some((m) => m._id === message._id) ? list : [...list, message]));
+        if (String(message.sender?._id || message.sender) !== String(user?._id || user?.id)) {
+          api(`/api/channels/${channelId}/messages/${message._id}/read`, { method: "POST" }).catch(() => {});
+        }
       }
     }
+    function onUpdated({ message }) { if (String(message.channel) === channelId || String(message.channel?._id) === channelId) setMessages((list) => list.map((item) => item._id === message._id ? message : item)); }
+    function onDeleted({ messageId, channelId: changedChannel }) { if (changedChannel === channelId) setMessages((list) => list.map((item) => item._id === messageId ? { ...item, body: "", attachments: [], deletedAt: new Date().toISOString() } : item)); }
     function onTyping(payload) {
       if (payload.channelId !== channelId || payload.userId === (user?._id || user?.id)) return;
       setTyping(payload.typing ? `${payload.name} is typing…` : "");
     }
     socket.on("chat:message", onMessage);
     socket.on("chat:typing", onTyping);
+    socket.on("chat:message-updated", onUpdated);
+    socket.on("chat:message-deleted", onDeleted);
     return () => {
       socket.off("chat:message", onMessage);
       socket.off("chat:typing", onTyping);
+      socket.off("chat:message-updated", onUpdated);
+      socket.off("chat:message-deleted", onDeleted);
     };
   }, [socket, channelId, user]);
+
+  useEffect(() => () => window.clearTimeout(typingTimer.current), []);
 
   async function send(e) {
     e.preventDefault();
@@ -88,6 +103,14 @@ export default function Chat() {
     }
   }
 
+  async function loadOlder() {
+    if (!messages.length) return;
+    try {
+      const data = await api(`/api/channels/${channelId}/messages?before=${encodeURIComponent(messages[0].createdAt)}`);
+      setMessages((current) => [...data.messages.filter((item) => !current.some((existing) => existing._id === item._id)), ...current]);
+    } catch (err) { setError(err.message); }
+  }
+
   const channel = channels.find((c) => c._id === channelId);
   const myId = user?._id || user?.id;
 
@@ -104,6 +127,7 @@ export default function Chat() {
       {error && <div className="error" role="alert">{error}</div>}
       <div className="chat">
         <div className="messages" ref={scroller}>
+          {!loading && messages.length > 0 && <button type="button" className="link-btn load-older" onClick={loadOlder}>Load older messages</button>}
           {loading && <div className="skeleton" />}
           {!loading && messages.length === 0 && <div className="empty">No messages yet. Say hello 👋</div>}
           {messages.map((m, i) => {
@@ -119,7 +143,7 @@ export default function Chat() {
                       <strong>{m.sender?.name}</strong> <span className="muted">{formatDateTime(m.createdAt)}</span>
                     </div>
                   )}
-                  {m.body && <div className="bubble">{m.body}</div>}
+                  {m.deletedAt ? <div className="bubble muted">Message deleted</div> : m.body && <div className="bubble">{m.body}{m.editedAt && <small className="muted"> · edited</small>}</div>}
                   {m.attachments?.length > 0 && (
                     <div className="attachments">
                       {m.attachments.map((a) => (
@@ -129,6 +153,7 @@ export default function Chat() {
                       ))}
                     </div>
                   )}
+                  {mine && !m.deletedAt && <div className="msg-actions"><button className="link-btn" type="button" onClick={async () => { const nextBody = window.prompt("Edit message", m.body); if (nextBody && nextBody.trim() !== m.body) await api(`/api/channels/${channelId}/messages/${m._id}`, { method: "PATCH", body: { body: nextBody.trim() } }).catch((err) => setError(err.message)); }}>Edit</button> <button className="link-btn" type="button" onClick={async () => { if (!window.confirm("Delete this message?")) return; await api(`/api/channels/${channelId}/messages/${m._id}`, { method: "DELETE" }).catch((err) => setError(err.message)); }}>Delete</button></div>}
                 </div>
               </div>
             );
@@ -155,6 +180,8 @@ export default function Chat() {
             onChange={(e) => {
               setBody(e.target.value);
               socket?.emit("chat:typing", { channelId, typing: e.target.value.length > 0 });
+              window.clearTimeout(typingTimer.current);
+              typingTimer.current = window.setTimeout(() => socket?.emit("chat:typing", { channelId, typing: false }), 900);
             }}
           />
           <button className="btn" disabled={!body.trim() && files.length === 0}>Send</button>
