@@ -23,6 +23,11 @@ router.post("/logout", auth.logout);
 router.post("/sessions/revoke", requireAuth, auth.revokeSessions);
 router.get("/me", requireAuth, auth.me);
 router.patch("/me", requireAuth, validate(auth.profileSchema), auth.updateMe);
+router.post("/email/verify", validate(auth.emailVerificationSchema), auth.verifyEmail);
 router.post("/password", requireAuth, authLimit, validate(auth.passwordSchema), auth.changePassword);
+router.get("/sessions", requireAuth, auth.listSessions);
+router.delete("/sessions/:sessionId", requireAuth, auth.deleteSession);
+router.post("/logout-all", requireAuth, auth.revokeSessions);
+router.patch("/preferences", requireAuth, validate(auth.preferencesSchema), auth.updatePreferences);
 
 module.exports = router;

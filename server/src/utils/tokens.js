@@ -9,9 +9,9 @@ const SESSION_POLICIES = Object.freeze({
 });
 const REMEMBERED_SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 
-function signToken(userId, tokenVersion = 0, sessionPolicy = SESSION_POLICIES.STANDARD) {
+function signToken(userId, tokenVersion = 0, sessionPolicy = SESSION_POLICIES.STANDARD, sessionId) {
   const expiresIn = sessionPolicy === SESSION_POLICIES.REMEMBERED ? "30d" : env.jwtExpiresIn;
-  return jwt.sign({ sub: String(userId), ver: tokenVersion, sessionPolicy }, env.jwtSecret, {
+  return jwt.sign({ sub: String(userId), ver: tokenVersion, sessionPolicy, ...(sessionId ? { sid: sessionId } : {}) }, env.jwtSecret, {
     expiresIn,
   });
 }

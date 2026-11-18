@@ -1,5 +1,7 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const Session = require("../models/Session");
+const crypto = require("crypto");
 const Workspace = require("../models/Workspace");
 const Channel = require("../models/Channel");
 const { env } = require("../config/env");
@@ -61,6 +63,12 @@ function attachSockets(io) {
       if (!user) return next(new Error("User no longer exists"));
       if ((payload.ver || 0) !== user.tokenVersion) {
         return next(new Error("Session has ended"));
+      }
+      if (payload.sid) {
+        const session = await Session.findOne({ user: user._id, sidHash: crypto.createHash("sha256").update(payload.sid).digest("hex") });
+        if (!session) return next(new Error("Session has ended"));
+        session.lastActivityAt = new Date();
+        await session.save();
       }
       socket.user = user;
       socket.data.authExpiresAt = payload.exp ? payload.exp * 1000 : null;
