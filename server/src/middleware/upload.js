@@ -18,11 +18,17 @@ const allowed = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 ]);
+const safeExtensions = {
+  "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif",
+  "application/pdf": ".pdf", "text/plain": ".txt", "application/zip": ".zip",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+};
 
 const storage = multer.diskStorage({
   destination: dest,
   filename: (req, file, cb) => {
-    const safe = `${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(file.originalname).slice(0, 8)}`;
+    const safe = `${Date.now()}-${Math.round(Math.random() * 1e9)}${safeExtensions[file.mimetype] || ".bin"}`;
     req.uploadedFilePaths ||= [];
     req.uploadedFilePaths.push(path.join(dest, safe));
     cb(null, safe);

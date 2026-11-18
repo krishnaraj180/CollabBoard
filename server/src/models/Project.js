@@ -56,8 +56,6 @@ const projectMilestoneSchema = new mongoose.Schema(
     dueDate: { type: Date },
     progress: { type: Number, min: 0, max: 100, default: 0 },
     completedAt: { type: Date },
-    archivedAt: { type: Date, default: null },
-    archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: true }
 );
@@ -84,6 +82,8 @@ const projectSchema = new mongoose.Schema(
     status: { type: String, enum: PROJECT_STATUSES, default: "active" },
     dueDate: { type: Date },
     completedAt: { type: Date },
+    archivedAt: { type: Date, default: null, index: true },
+    archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     owner: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     projectManager: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     scope: { type: String, default: "", maxlength: 4000 },
@@ -103,6 +103,7 @@ projectSchema.index(
   { proposal: 1, workspace: 1 },
   { unique: true, partialFilterExpression: { proposal: { $type: "objectId" } } }
 );
+projectSchema.index({ workspace: 1, archivedAt: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Project", projectSchema);
 module.exports.PROJECT_STATUSES = PROJECT_STATUSES;

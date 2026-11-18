@@ -1,7 +1,7 @@
 const http = require("http");
 const { Server } = require("socket.io");
 const { env } = require("./config/env");
-const { connectDb } = require("./config/db");
+const { connectDb, disconnectDb } = require("./config/db");
 const { createApp } = require("./app");
 const { attachSockets } = require("./sockets");
 
@@ -11,6 +11,9 @@ async function main() {
   const server = http.createServer(app);
   const io = new Server(server, {
     cors: { origin: env.clientOrigins, credentials: true },
+    maxHttpBufferSize: 1e6,
+    pingInterval: 25000,
+    pingTimeout: 20000,
   });
   app.set("io", io);
   attachSockets(io);
@@ -23,7 +26,10 @@ async function main() {
   const shutdown = (signal) => {
     console.log(`${signal} received, shutting down`);
     io.close();
-    server.close(() => process.exit(0));
+    server.close(async () => {
+      await disconnectDb();
+      process.exit(0);
+    });
     setTimeout(() => process.exit(1), 10000).unref();
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));
