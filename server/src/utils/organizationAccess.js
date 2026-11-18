@@ -1,5 +1,5 @@
 const { AppError } = require("./errors");
-const { findActiveMembership } = require("./organizationMembership");
+const { getMembership } = require("../services/tenantAccess");
 
 function modelName(parent) {
   return parent?.constructor?.modelName || parent?.$__?.model?.constructor?.modelName || null;
@@ -32,7 +32,7 @@ const ORGANIZATION_PERMISSIONS = {
 
 async function organizationMemberOf(organization, userId) {
   if (!organization?._id) return null;
-  return findActiveMembership(organization._id, userId);
+  return getMembership(userId, organization._id);
 }
 
 function hasOrganizationPermission(user, membership, permission) {
@@ -43,7 +43,7 @@ function hasOrganizationPermission(user, membership, permission) {
 
 function canAccessOrganizationProject(project, membership, userId, platformRole = null) {
   if (!membership) return platformRole === "super_admin";
-  if (["super_admin", "organization_admin", "viewer"].includes(membership.role) || platformRole === "super_admin") return true;
+  if (["super_admin", "organization_owner", "organization_admin", "viewer"].includes(membership.role) || platformRole === "super_admin") return true;
   const id = String(userId);
   if (membership.role === "project_manager" &&
       String(project.projectManager?._id || project.projectManager || "") === id) return true;

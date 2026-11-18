@@ -16,6 +16,8 @@ const { emitToProjectWorkspace } = require("../sockets");
 const { notifyUsers } = require("../utils/notify");
 const { logActivity } = require("../utils/activity");
 const { secureBody } = require("../utils/inputSecurity");
+const { loadTenantResource } = require("../services/tenantAccess");
+const { listScope } = require("../services/tenantAccess");
 
 /* ------------------------------------------------------------------ */
 /* Validation                                                          */
@@ -40,12 +42,12 @@ const createSchema = z.object({
     status: z.enum(PROJECT_STATUSES).optional(),
     startDate: dateField,
     dueDate: dateField,
-  })),
+  }), ["status"]),
 });
 
 const projectUpdateSchema = z.object({
   params: z.object({ id: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     name: z.string().min(2).max(80).optional(),
     description: z.string().max(400).optional(),
     status: z.enum(PROJECT_STATUSES).optional(),
@@ -60,23 +62,23 @@ const projectUpdateSchema = z.object({
       teamLeadId: z.string(),
       memberIds: z.array(z.string()).max(100).default([]),
     })).max(20).optional(),
-  }),
+  }), ["status"]),
 });
 
 const projectTeamMembersSchema = z.object({
   params: z.object({ id: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     department: z.string().trim().min(1).max(60),
     memberIds: z.array(z.string()).min(1).max(100),
-  }),
+  })),
 });
 
 const workflowTransitionSchema = z.object({
   params: z.object({ id: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     action: z.enum(["approve", "submit", "complete", "request_changes", "pass", "fail", "deploy", "release", "launch"]),
     note: z.string().max(1000).optional().default(""),
-  }),
+  })),
 });
 
 const taskCreateSchema = z.object({
@@ -99,7 +101,7 @@ const taskCreateSchema = z.object({
 
 const taskUpdateSchema = z.object({
   params: z.object({ id: z.string(), taskId: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     title: z.string().min(1).max(160).optional(),
     description: z.string().max(4000).optional(),
     columnId: z.string().optional(),
@@ -113,18 +115,18 @@ const taskUpdateSchema = z.object({
     progress: z.number().int().min(0).max(100).optional(),
     sprintId: z.string().nullable().optional(),
     dependencies: z.array(z.string()).max(100).optional(),
-  }),
+  })),
 });
 
 const taskReorderSchema = z.object({
   params: z.object({ id: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     moves: z.array(z.object({
       taskId: z.string(),
       columnId: z.string(),
       order: z.number().int().min(0).max(10000),
     })).min(1).max(500),
-  }),
+  })),
 });
 
 const sprintCreateSchema = z.object({
@@ -139,12 +141,12 @@ const sprintCreateSchema = z.object({
 
 const sprintUpdateSchema = z.object({
   params: z.object({ id: z.string(), sprintId: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     name: z.string().trim().min(2).max(80).optional(),
     goal: z.string().trim().max(1000).optional(),
     startDate: z.string().min(1).optional(),
     endDate: z.string().min(1).optional(),
-  }),
+  })),
 });
 
 const milestoneCreateSchema = z.object({
@@ -158,12 +160,12 @@ const milestoneCreateSchema = z.object({
 
 const milestoneUpdateSchema = z.object({
   params: z.object({ id: z.string(), milestoneId: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     title: z.string().trim().min(2).max(120).optional(),
     description: z.string().trim().max(1000).optional(),
     dueDate: dateField,
     progress: z.number().int().min(0).max(100).optional(),
-  }),
+  })),
 });
 
 const emptyBodySchema = z.object({
@@ -173,12 +175,12 @@ const emptyBodySchema = z.object({
 
 const commentSchema = z.object({
   params: z.object({ id: z.string(), taskId: z.string() }),
-  body: z.object({ body: z.string().min(1).max(2000) }),
+  body: secureBody(z.object({ body: z.string().min(1).max(2000) })),
 });
 
 const commentUpdateSchema = z.object({
   params: z.object({ id: z.string(), taskId: z.string(), commentId: z.string() }),
-  body: z.object({ body: z.string().min(1).max(2000) }),
+  body: secureBody(z.object({ body: z.string().min(1).max(2000) })),
 });
 
 /* ------------------------------------------------------------------ */
@@ -260,16 +262,14 @@ async function ensureBacklogColumn(project) {
 }
 
 async function loadWorkspace(id, userId, platformRole = null) {
-  assertObjectId(id, "workspace id");
-  const workspace = await Workspace.findById(id);
-  if (!workspace) throw new AppError("Workspace not found", 404);
+  const workspace = await loadTenantResource(Workspace, id, { _id: userId, platformRole }, { route: "projects.workspace" });
   const organization = workspace.organizationId ? await Organization.findById(workspace.organizationId) : null;
   const organizationMembership = organization ? await organizationMemberOf(organization, userId) : null;
   if (organization && (organization.status !== "active" || (!organizationMembership && platformRole !== "super_admin"))) {
     throw new AppError("You do not have access to this organization workspace", 403);
   }
   const membership = memberOf(workspace, userId) || (
-    organizationMembership?.role === "organization_admin"
+    ["organization_admin", "organization_owner"].includes(organizationMembership?.role)
       ? { user: userId, role: "viewer", companyWideAccess: true }
       : null
   );
@@ -279,10 +279,8 @@ async function loadWorkspace(id, userId, platformRole = null) {
 
 /** Loads project + workspace and the caller's membership in one go. */
 async function loadProject(req) {
-  assertObjectId(req.params.id, "project id");
-  const project = await Project.findById(req.params.id);
-  if (!project) throw new AppError("Project not found", 404);
-  const { workspace, membership, organization, organizationMembership } = await loadWorkspace(project.workspace, req.user._id, req.user.platformRole);
+  const project = await loadTenantResource(Project, req.params.id, req.user, { populate: "workspace", route: req.originalUrl });
+  const { workspace, membership, organization, organizationMembership } = await loadWorkspace(project.workspace?._id || project.workspace, req.user._id, req.user.platformRole);
   if (!canAccessProject(project, membership, req.user._id) &&
       !canAccessOrganizationProject(project, organizationMembership, req.user._id, req.user.platformRole)) {
     throw new AppError("You are not assigned to this project or its current approval step", 403);
@@ -1770,7 +1768,8 @@ const updateComment = asyncHandler(async (req, res) => {
 
 const projectActivity = asyncHandler(async (req, res) => {
   const { project } = await loadProject(req);
-  const items = await Activity.find({ project: project._id })
+  const { organizationIds } = await listScope(req.user._id);
+  const items = await Activity.find({ project: project._id, organizationId: { $in: [...organizationIds, null] } })
     .sort({ createdAt: -1 })
     .limit(40)
     .populate("actor", "name avatarColor");
@@ -1818,6 +1817,7 @@ const dashboard = asyncHandler(async (req, res) => {
     Activity.find({
       workspace: workspace._id,
       project: { $in: projectIds },
+      organizationId: { $in: [workspace.organizationId, null] },
     })
       .sort({ createdAt: -1 })
       .limit(15)
@@ -1872,6 +1872,7 @@ const workspaceActivity = asyncHandler(async (req, res) => {
   const query = {
     workspace: workspace._id,
     project: { $in: projects.map((project) => project._id) },
+    organizationId: { $in: [workspace.organizationId, null] },
   };
   const items = await Activity.find(query)
     .sort({ createdAt: -1 })

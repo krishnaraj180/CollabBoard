@@ -13,6 +13,7 @@ const { DEFAULT_DEPARTMENTS } = require("../utils/organization");
 const { ASSIGNABLE_WORKSPACE_ROLES } = require("../utils/access");
 const { resolveTenantFromParent } = require("../utils/organizationAccess");
 const { secureBody } = require("../utils/inputSecurity");
+const { listScope, loadTenantResource } = require("../services/tenantAccess");
 
 const TEAM_LEAD_INVITE_ROLES = {
   team_lead: ["frontend_developer", "backend_developer", "react_developer", "ui_developer", "nodejs_developer", "java_developer", "python_developer"],
@@ -32,10 +33,10 @@ const createSchema = z.object({
 
 const updateSchema = z.object({
   params: z.object({ id: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     name: z.string().min(2).max(80).optional(),
     description: z.string().max(400).optional(),
-  }),
+  })),
 });
 
 const inviteSchema = z.object({
@@ -91,10 +92,10 @@ async function ensureGeneralChannel(workspace, userId) {
 }
 
 const list = asyncHandler(async (req, res) => {
-  const organizations = await Organization.find({ status: "active", members: { $elemMatch: { user: req.user._id, status: { $in: ["active", null] } } } }).select("_id").lean();
+  const scope = await listScope(req.user._id);
   const query = req.user.platformRole === "super_admin"
     ? {}
-    : { $or: [{ organizationId: null, "members.user": req.user._id }, { organizationId: { $in: organizations.map((organization) => organization._id) } }] };
+    : { $or: [{ organizationId: null, _id: { $in: scope.legacyWorkspaceIds } }, { organizationId: { $in: scope.organizationIds } }] };
   const workspaces = await Workspace.find(query).populate(
     "members.user",
     "name email avatarColor lastSeenAt"
@@ -151,11 +152,10 @@ const create = asyncHandler(async (req, res) => {
 });
 
 const getOne = asyncHandler(async (req, res) => {
-  const workspace = await Workspace.findById(req.params.id).populate(
-    "members.user",
-    "name email avatarColor lastSeenAt"
-  );
-  if (!workspace) throw new AppError("Workspace not found", 404);
+  const workspace = await loadTenantResource(Workspace, req.params.id, req.user, {
+    populate: { path: "members.user", select: "name email avatarColor lastSeenAt" },
+    route: req.originalUrl,
+  });
   if (!workspace.members.some((member) => getMemberUserId(member) === String(req.user._id))) {
     const companyOwner = workspace.organizationId && await Organization.exists({
       _id: workspace.organizationId,
@@ -187,8 +187,7 @@ const getOne = asyncHandler(async (req, res) => {
 });
 
 const invite = asyncHandler(async (req, res) => {
-  const workspace = await Workspace.findById(req.params.id);
-  if (!workspace) throw new AppError("Workspace not found", 404);
+  const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
   const actor = requireRole(workspace, req.user._id, [
     "owner", "admin", "ceo", "managing_director", ...Object.keys(TEAM_LEAD_INVITE_ROLES),
   ]);
@@ -257,8 +256,7 @@ const invite = asyncHandler(async (req, res) => {
 });
 
 const update = asyncHandler(async (req, res) => {
-  const workspace = await Workspace.findById(req.params.id);
-  if (!workspace) throw new AppError("Workspace not found", 404);
+  const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
   requireRole(workspace, req.user._id, ["owner", "admin", "ceo"]);
   if (req.body.name !== undefined) workspace.name = req.body.name;
   if (req.body.description !== undefined) workspace.description = req.body.description;
@@ -268,8 +266,7 @@ const update = asyncHandler(async (req, res) => {
 });
 
 const updateRole = asyncHandler(async (req, res) => {
-  const workspace = await Workspace.findById(req.params.id);
-  if (!workspace) throw new AppError("Workspace not found", 404);
+  const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
   const actor = requireRole(workspace, req.user._id, ["owner", "ceo"]);
   const member = workspace.members.find((m) => getMemberUserId(m) === req.params.userId);
   if (!member) throw new AppError("Member not found", 404);
@@ -307,8 +304,7 @@ const updateRole = asyncHandler(async (req, res) => {
 });
 
 const updateOrganizationMember = asyncHandler(async (req, res) => {
-  const workspace = await Workspace.findById(req.params.id);
-  if (!workspace) throw new AppError("Workspace not found", 404);
+  const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
   requireRole(workspace, req.user._id, ["owner", "admin", "ceo", "managing_director"]);
   const member = workspace.members.find((m) => getMemberUserId(m) === req.params.userId);
   if (!member) throw new AppError("Member not found", 404);
@@ -346,8 +342,7 @@ const updateOrganizationMember = asyncHandler(async (req, res) => {
 });
 
 const updateOrganization = asyncHandler(async (req, res) => {
-  const workspace = await Workspace.findById(req.params.id);
-  if (!workspace) throw new AppError("Workspace not found", 404);
+  const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
   requireRole(workspace, req.user._id, ["owner", "admin", "ceo", "managing_director"]);
 
   workspace.organization.departments = req.body.departments;
@@ -365,8 +360,7 @@ const updateOrganization = asyncHandler(async (req, res) => {
 });
 
 const removeMember = asyncHandler(async (req, res) => {
-  const workspace = await Workspace.findById(req.params.id);
-  if (!workspace) throw new AppError("Workspace not found", 404);
+  const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
   const actor = requireRole(workspace, req.user._id, [
     "owner", "admin", "ceo", "managing_director", ...Object.keys(TEAM_LEAD_INVITE_ROLES),
   ]);

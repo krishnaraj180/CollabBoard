@@ -19,6 +19,8 @@ const {
   findMembership,
   assertOwnerInvariant,
 } = require("../utils/organizationMembership");
+const { loadTenantResource } = require("../services/tenantAccess");
+const { activeOrganizationsFor } = require("../services/tenantAccess");
 
 const roles = Organization.ORGANIZATION_ROLES;
 const createSchema = z.object({
@@ -155,11 +157,8 @@ async function uniqueSlug(name) {
   return slug;
 }
 
-async function loadOrganization(id) {
-  assertObjectId(id, "organization id");
-  const organization = await Organization.findById(id);
-  if (!organization) throw new AppError("Organization not found", 404);
-  return organization;
+async function loadOrganization(id, user) {
+  return loadTenantResource(Organization, id, user, { route: "organizations" });
 }
 
 async function formatOrganization(organization) {
@@ -248,9 +247,8 @@ async function assertSingleLocationMembership(organization, workspace) {
 }
 
 const list = asyncHandler(async (req, res) => {
-  const query = req.user.platformRole === "super_admin"
-    ? {}
-    : { "members.user": req.user._id };
+  const organizationIds = req.user.platformRole === "super_admin" ? null : await activeOrganizationsFor(req.user._id);
+  const query = organizationIds ? { _id: { $in: organizationIds } } : {};
   const organizations = await Organization.find(query).sort({ name: 1 });
   const result = await Promise.all(organizations.map(formatOrganization));
   res.json({ organizations: result });
@@ -282,7 +280,7 @@ const create = asyncHandler(async (req, res) => {
 });
 
 const getOne = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   const membership = await requireOrganizationPermission(organization, req.user, "organization:read");
   res.json({
     organization: await formatOrganization(organization),
@@ -292,7 +290,7 @@ const getOne = asyncHandler(async (req, res) => {
 });
 
 const update = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   await requireOrganizationPermission(organization, req.user, "organization:update");
   for (const key of ["name", "description", "industry", "companySize", "logo", "website"]) {
     if (req.body[key] !== undefined) organization[key] = req.body[key];
@@ -305,7 +303,7 @@ const update = asyncHandler(async (req, res) => {
 });
 
 const createLocation = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   await requireOrganizationPermission(organization, req.user, "organization:update");
   assertUniqueNames([req.body.name, ...organization.locations.map((location) => location.name)], "Location names");
   const { workspaceId, ...locationData } = req.body;
@@ -317,7 +315,7 @@ const createLocation = asyncHandler(async (req, res) => {
 });
 
 const updateLocation = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   await requireOrganizationPermission(organization, req.user, "organization:update");
   assertObjectId(req.params.locationId, "location id");
   const location = organization.locations.id(req.params.locationId);
@@ -349,7 +347,7 @@ const updateLocation = asyncHandler(async (req, res) => {
 });
 
 const removeLocation = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   await requireOrganizationPermission(organization, req.user, "organization:update");
   assertObjectId(req.params.locationId, "location id");
   const location = organization.locations.id(req.params.locationId);
@@ -363,14 +361,14 @@ const removeLocation = asyncHandler(async (req, res) => {
 });
 
 const listProposals = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   await requireOrganizationPermission(organization, req.user, "organization:proposals");
   const proposals = await ProjectProposal.find({ organization: organization._id }).sort({ createdAt: -1 });
   res.json({ proposals: await Promise.all(proposals.map((proposal) => formatProposal(proposal, organization))) });
 });
 
 const createProposal = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   await requireOrganizationPermission(organization, req.user, "organization:proposals");
   const proposal = await ProjectProposal.create({
     ...req.body,
@@ -391,7 +389,7 @@ const createProposal = asyncHandler(async (req, res) => {
 });
 
 const decideProposal = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   await requireOrganizationPermission(organization, req.user, "organization:update");
   assertObjectId(req.params.proposalId, "proposal id");
   let proposal = await ProjectProposal.findOne({
@@ -497,7 +495,7 @@ const decideProposal = asyncHandler(async (req, res) => {
 });
 
 const inviteMember = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   const membership = await requireOrganizationPermission(organization, req.user, "organization:invite");
   const email = req.body.email.toLowerCase();
   const invitee = await User.findOne({ email }).select("name email");
@@ -533,7 +531,7 @@ const inviteMember = asyncHandler(async (req, res) => {
 });
 
 const listInvitations = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   await requireOrganizationPermission(organization, req.user, "organization:invite");
   const invitations = await OrganizationInvitation.find({
     organization: organization._id,
@@ -545,7 +543,7 @@ const listInvitations = asyncHandler(async (req, res) => {
 });
 
 const revokeInvitation = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   await requireOrganizationPermission(organization, req.user, "organization:invite");
   assertObjectId(req.params.invitationId, "invitation id");
   const invitation = await OrganizationInvitation.findOneAndUpdate(
@@ -603,12 +601,12 @@ const acceptInvitation = asyncHandler(async (req, res) => {
     await OrganizationInvitation.updateOne({ _id: invitation._id, acceptedAt: now }, { $set: { acceptedAt: null } });
     throw error;
   }
-  const organization = await loadOrganization(invitation.organization);
+  const organization = await loadOrganization(invitation.organization, req.user);
   res.json({ organization: await formatOrganization(organization) });
 });
 
 const updateMember = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   const actor = await requireOrganizationPermission(organization, req.user, "organization:members");
   assertObjectId(req.params.userId, "member id");
   const member = organization.members.find((item) => getMemberUserId(item) === req.params.userId);
@@ -661,7 +659,7 @@ const updateMember = asyncHandler(async (req, res) => {
 });
 
 const removeMember = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   const actor = await requireOrganizationPermission(organization, req.user, "organization:members");
   assertObjectId(req.params.userId, "member id");
   const target = organization.members.find((member) => getMemberUserId(member) === req.params.userId);
@@ -695,7 +693,7 @@ const removeMember = asyncHandler(async (req, res) => {
 });
 
 const createDepartment = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   await requireOrganizationPermission(organization, req.user, "organization:departments");
   assertUniqueNames([req.body.name, ...organization.departments.map((department) => department.name)], "Department names");
   assertUniqueNames(req.body.positions, "Position names");
@@ -705,7 +703,7 @@ const createDepartment = asyncHandler(async (req, res) => {
 });
 
 const updateDepartment = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   await requireOrganizationPermission(organization, req.user, "organization:departments");
   assertObjectId(req.params.departmentId, "department id");
   const department = organization.departments.id(req.params.departmentId);
@@ -738,7 +736,7 @@ const updateDepartment = asyncHandler(async (req, res) => {
 });
 
 const removeDepartment = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   await requireOrganizationPermission(organization, req.user, "organization:departments");
   assertObjectId(req.params.departmentId, "department id");
   const department = organization.departments.id(req.params.departmentId);
@@ -771,7 +769,7 @@ async function assertWorkspaceAdmin(workspace, userId, organization = null) {
 }
 
 const linkWorkspace = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   await requireOrganizationPermission(organization, req.user, "organization:workspaces");
   assertObjectId(req.params.workspaceId, "workspace id");
   const workspace = await Workspace.findById(req.params.workspaceId);
@@ -793,7 +791,7 @@ const linkWorkspace = asyncHandler(async (req, res) => {
 });
 
 const unlinkWorkspace = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   await requireOrganizationPermission(organization, req.user, "organization:workspaces");
   assertObjectId(req.params.workspaceId, "workspace id");
   const workspace = await Workspace.findOne({ _id: req.params.workspaceId, organizationId: organization._id });
@@ -810,7 +808,7 @@ const unlinkWorkspace = asyncHandler(async (req, res) => {
 });
 
 const workload = asyncHandler(async (req, res) => {
-  const organization = await loadOrganization(req.params.id);
+  const organization = await loadOrganization(req.params.id, req.user);
   await requireOrganizationPermission(organization, req.user, "organization:reports");
   const workspaces = await Workspace.find({ organizationId: organization._id }).select("_id");
   const workspaceIds = workspaces.map((workspace) => workspace._id);

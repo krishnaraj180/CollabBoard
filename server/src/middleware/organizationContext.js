@@ -1,20 +1,14 @@
-const mongoose = require("mongoose");
-const Organization = require("../models/Organization");
-const { AppError, asyncHandler } = require("../utils/errors");
-const { organizationMemberOf } = require("../utils/organizationAccess");
+const { asyncHandler } = require("../utils/errors");
+const { loadTenantResource, getMembership } = require("../services/tenantAccess");
+const { organizationSuspended, tenantNotFound } = require("../utils/tenantErrors");
 
 const resolveOrganizationContext = asyncHandler(async (req, res, next) => {
   const id = req.params.id || req.params.organizationId;
-  if (!mongoose.isValidObjectId(id)) throw new AppError("Invalid organization id", 400);
-  const organization = await Organization.findById(id);
-  if (!organization) throw new AppError("Organization not found", 404);
-  if (organization.status !== "active" && req.user.platformRole !== "super_admin") {
-    throw new AppError("Organization is not active", 403);
-  }
-  const membership = await organizationMemberOf(organization, req.user._id);
-  if (!membership && req.user.platformRole !== "super_admin") {
-    throw new AppError("You do not have access to this organization", 404);
-  }
+  const Organization = require("../models/Organization");
+  const organization = await loadTenantResource(Organization, id, req.user, { route: req.originalUrl });
+  const membership = await getMembership(req.user._id, organization._id);
+  if (organization.status === "suspended" && membership) throw organizationSuspended();
+  if (!membership && req.user.platformRole !== "super_admin") throw tenantNotFound();
   req.organization = organization;
   req.organizationMembership = membership;
   next();

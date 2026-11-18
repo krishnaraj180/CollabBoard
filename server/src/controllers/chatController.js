@@ -10,6 +10,7 @@ const { emitToChannel, emitToWorkspace } = require("../sockets");
 const { notifyUsers } = require("../utils/notify");
 const { resolveTenantFromParent } = require("../utils/organizationAccess");
 const { secureBody } = require("../utils/inputSecurity");
+const { loadTenantResource } = require("../services/tenantAccess");
 
 const channelSchema = z.object({
   params: z.object({ workspaceId: z.string() }),
@@ -30,8 +31,7 @@ const messageReadSchema = z.object({
 });
 
 async function loadWorkspace(id, userId) {
-  const workspace = await Workspace.findById(id);
-  if (!workspace) throw new AppError("Workspace not found", 404);
+  const workspace = await loadTenantResource(Workspace, id?._id || id, { _id: userId }, { route: "chat.workspace" });
   if (workspace.organizationId) {
     const organization = await Organization.findById(workspace.organizationId).select("status members");
     if (!organization || organization.status !== "active" || !await organizationMemberOf(organization, userId)) {
@@ -88,8 +88,7 @@ const createChannel = asyncHandler(async (req, res) => {
 });
 
 const listMessages = asyncHandler(async (req, res) => {
-  const channel = await Channel.findById(req.params.channelId);
-  if (!channel) throw new AppError("Channel not found", 404);
+  const channel = await loadTenantResource(Channel, req.params.channelId, req.user, { populate: "workspace", route: req.originalUrl });
   await loadWorkspace(channel.workspace, req.user._id);
   assertChannelMember(channel, req.user._id);
   const limit = Math.min(Number(req.query.limit || 50), 100);
@@ -104,8 +103,7 @@ const listMessages = asyncHandler(async (req, res) => {
 });
 
 const createMessage = asyncHandler(async (req, res) => {
-  const channel = await Channel.findById(req.params.channelId);
-  if (!channel) throw new AppError("Channel not found", 404);
+  const channel = await loadTenantResource(Channel, req.params.channelId, req.user, { populate: "workspace", route: req.originalUrl });
   const { workspace, membership } = await loadWorkspace(channel.workspace, req.user._id);
   requireWritableMember(membership);
   assertChannelMember(channel, req.user._id);
@@ -150,12 +148,10 @@ const createMessage = asyncHandler(async (req, res) => {
 });
 
 async function loadMessage(req) {
-  const channel = await Channel.findById(req.params.channelId);
-  if (!channel) throw new AppError("Channel not found", 404);
+  const channel = await loadTenantResource(Channel, req.params.channelId, req.user, { populate: "workspace", route: req.originalUrl });
   const { membership } = await loadWorkspace(channel.workspace, req.user._id);
   assertChannelMember(channel, req.user._id);
-  const message = await Message.findOne({ _id: req.params.messageId, channel: channel._id });
-  if (!message) throw new AppError("Message not found", 404);
+  const message = await loadTenantResource(Message, req.params.messageId, req.user, { populate: { path: "channel", populate: { path: "workspace" } }, route: req.originalUrl });
   return { channel, membership, message };
 }
 

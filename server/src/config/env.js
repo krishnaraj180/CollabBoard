@@ -11,6 +11,10 @@ function required(name) {
 
 const isTest = process.env.NODE_ENV === "test";
 const isProd = process.env.NODE_ENV === "production";
+const tenantEnforcement = (process.env.TENANT_ENFORCEMENT || "off").toLowerCase();
+if (!["off", "log", "on"].includes(tenantEnforcement)) {
+  throw new Error("TENANT_ENFORCEMENT must be off, log, or on");
+}
 const cookieSameSite = (process.env.COOKIE_SAME_SITE || "lax").toLowerCase();
 if (!["lax", "strict", "none"].includes(cookieSameSite)) {
   throw new Error("COOKIE_SAME_SITE must be lax, strict, or none");
@@ -40,6 +44,8 @@ const env = {
   maxFileMb: Number(process.env.MAX_FILE_MB || 10),
   isProd,
   isTest,
+  tenantEnforcement,
+  tenantEnforcementOverride: process.env.TENANT_ENFORCEMENT_OVERRIDE === "true",
 };
 
 module.exports = { env };

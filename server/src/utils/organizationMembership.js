@@ -1,7 +1,7 @@
 const OrganizationMembership = require("../models/OrganizationMembership");
 
 async function findMembership(organizationId, userId) {
-  return OrganizationMembership.findOne({ organizationId, userId }).lean();
+  return OrganizationMembership.findOne({ organizationId, userId });
 }
 
 async function findActiveMembership(organizationId, userId) {
