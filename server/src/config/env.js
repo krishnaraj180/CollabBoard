@@ -10,9 +10,13 @@ function required(name) {
 }
 
 const isTest = process.env.NODE_ENV === "test";
+const isProd = process.env.NODE_ENV === "production";
 const cookieSameSite = (process.env.COOKIE_SAME_SITE || "lax").toLowerCase();
 if (!["lax", "strict", "none"].includes(cookieSameSite)) {
   throw new Error("COOKIE_SAME_SITE must be lax, strict, or none");
+}
+if (isProd && (process.env.JWT_SECRET || "").length < 32) {
+  throw new Error("JWT_SECRET must be at least 32 characters in production");
 }
 
 const env = {
@@ -34,7 +38,7 @@ const env = {
   resendApiKey: process.env.RESEND_API_KEY || "",
   uploadDir: process.env.UPLOAD_DIR || "uploads",
   maxFileMb: Number(process.env.MAX_FILE_MB || 10),
-  isProd: process.env.NODE_ENV === "production",
+  isProd,
   isTest,
 };
 

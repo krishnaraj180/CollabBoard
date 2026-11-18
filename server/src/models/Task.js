@@ -43,5 +43,8 @@ const taskSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+taskSchema.index({ project: 1, columnId: 1, order: 1 });
+taskSchema.index({ project: 1, dueDate: 1 });
+
 module.exports = mongoose.model("Task", taskSchema);
 module.exports.PRIORITIES = PRIORITIES;
