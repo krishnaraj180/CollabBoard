@@ -18,6 +18,9 @@ const messageSchema = new mongoose.Schema(
     sender: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     body: { type: String, default: "", maxlength: 4000 },
     attachments: { type: [attachmentSchema], default: [] },
+    editedAt: { type: Date, default: null },
+    deletedAt: { type: Date, default: null },
+    readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   },
   { timestamps: true }
 );

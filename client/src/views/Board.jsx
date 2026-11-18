@@ -281,6 +281,7 @@ export default function Board() {
     socket.on("activity:new", onActivity);
     socket.on("sprint:updated", onSprint);
     socket.on("milestone:updated", onMilestone);
+    socket.on("connect", load);
     return () => {
       socket.off("task:updated", onTask);
       socket.off("project:updated", onProject);
@@ -288,6 +289,7 @@ export default function Board() {
       socket.off("activity:new", onActivity);
       socket.off("sprint:updated", onSprint);
       socket.off("milestone:updated", onMilestone);
+      socket.off("connect", load);
     };
   }, [socket, projectId, workspaceId, router]);
 
