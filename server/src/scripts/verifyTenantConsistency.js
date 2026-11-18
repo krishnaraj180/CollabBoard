@@ -79,14 +79,16 @@ async function main() {
   for (const notification of notifications) {
     const meta = notification.meta || {};
     let parent;
-    if (!meta.resourceType) {
+    const resourceType = meta.resourceType || (meta.channelId ? "Channel" : null);
+    const resourceId = meta.resourceId || meta.channelId;
+    if (!resourceType) {
       compare(report.collections.Notification, id(notification.organizationId), null);
       continue;
     }
-    if (meta.resourceType === "Organization") parent = organizationIds.has(id(meta.resourceId)) ? id(meta.resourceId) : undefined;
-    else if (meta.resourceType === "Project") parent = projectOrgs.get(id(meta.resourceId));
-    else if (meta.resourceType === "Workspace") parent = workspaces.get(id(meta.resourceId));
-    else if (meta.resourceType === "Channel") parent = channelOrgs.get(id(meta.resourceId));
+    if (resourceType === "Organization") parent = organizationIds.has(id(resourceId)) ? id(resourceId) : undefined;
+    else if (resourceType === "Project") parent = projectOrgs.get(id(resourceId));
+    else if (resourceType === "Workspace") parent = workspaces.get(id(resourceId));
+    else if (resourceType === "Channel") parent = channelOrgs.get(id(resourceId));
     else report.collections.Notification.parentUnknown += 1;
     if (parent === undefined) report.collections.Notification.brokenParent += 1;
     else compare(report.collections.Notification, id(notification.organizationId), parent);
