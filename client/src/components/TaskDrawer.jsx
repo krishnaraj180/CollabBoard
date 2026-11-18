@@ -33,6 +33,8 @@ export default function TaskDrawer({ projectId, task, columns, members, tasks = 
   const [error, setError] = useState("");
   const [comment, setComment] = useState("");
   const [newItem, setNewItem] = useState("");
+  const [editingComment, setEditingComment] = useState(null);
+  const [editingCommentBody, setEditingCommentBody] = useState("");
 
   // Reset when a different task is opened; keep local edits when a teammate touches the same task.
   useEffect(() => {
@@ -123,6 +125,14 @@ export default function TaskDrawer({ projectId, task, columns, members, tasks = 
     } catch (err) {
       setError(err.message);
     }
+  }
+
+  async function updateComment(id) {
+    if (!editingCommentBody.trim()) return;
+    try {
+      await api(`/api/projects/${projectId}/tasks/${task._id}/comments/${id}`, { method: "PATCH", body: { body: editingCommentBody.trim() } });
+      setEditingComment(null);
+    } catch (err) { setError(err.message); }
   }
 
   async function remove() {
@@ -300,11 +310,9 @@ export default function TaskDrawer({ projectId, task, columns, members, tasks = 
                 <div>
                   <strong>{c.author?.name}</strong> <span className="muted">{formatDateTime(c.createdAt)}</span>
                 </div>
-                <div className="comment-body">{c.body}</div>
+                {editingComment === c._id ? <div className="stack nowrap"><input value={editingCommentBody} onChange={(e) => setEditingCommentBody(e.target.value)} maxLength={2000} /><button className="btn secondary" type="button" onClick={() => updateComment(c._id)}>Save</button></div> : <div className="comment-body">{c.body}</div>}
                 {(c.author?._id === me?._id || c.author?._id === me?.id || canDelete) && (
-                  <button className="link-btn" type="button" onClick={() => deleteComment(c._id)}>
-                    Delete
-                  </button>
+                  <span><button className="link-btn" type="button" onClick={() => { setEditingComment(c._id); setEditingCommentBody(c.body); }}>Edit</button> <button className="link-btn" type="button" onClick={() => deleteComment(c._id)}>Delete</button></span>
                 )}
               </div>
             </li>

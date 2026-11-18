@@ -37,6 +37,7 @@ const createSchema = z.object({
     name: z.string().min(2).max(80),
     description: z.string().max(400).optional().default(""),
     status: z.enum(PROJECT_STATUSES).optional(),
+    startDate: dateField,
     dueDate: dateField,
   }),
 });
@@ -48,6 +49,7 @@ const projectUpdateSchema = z.object({
     description: z.string().max(400).optional(),
     status: z.enum(PROJECT_STATUSES).optional(),
     dueDate: dateField,
+    startDate: dateField,
     projectManagerId: z.string().nullable().optional(),
     scope: z.string().max(4000).optional(),
     budget: z.number().min(0).nullable().optional(),
@@ -173,6 +175,11 @@ const commentSchema = z.object({
   body: z.object({ body: z.string().min(1).max(2000) }),
 });
 
+const commentUpdateSchema = z.object({
+  params: z.object({ id: z.string(), taskId: z.string(), commentId: z.string() }),
+  body: z.object({ body: z.string().min(1).max(2000) }),
+});
+
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
@@ -277,6 +284,10 @@ async function loadProject(req) {
     throw new AppError("You are not assigned to this project or its current approval step", 403);
   }
   return { project, workspace, membership, organization, organizationMembership };
+}
+
+function requireActiveProject(project) {
+  if (project.archivedAt) throw new AppError("This project is archived. Restore it before making changes.", 409);
 }
 
 function requireManager(membership, organizationMembership = null) {
@@ -696,8 +707,8 @@ async function statsForProjects(projects) {
   }));
 }
 
-async function findAccessibleProjects(workspaceId, membership, userId, organization = null, user = null) {
-  const projects = await Project.find({ workspace: workspaceId })
+async function findAccessibleProjects(workspaceId, membership, userId, organization = null, user = null, includeArchived = false) {
+  const projects = await Project.find({ workspace: workspaceId, ...(includeArchived ? {} : { archivedAt: null }) })
     .populate("projectManager", USER_FIELDS)
     .sort({ createdAt: -1 });
   const organizationMembership = organization ? organizationMemberOf(organization, userId) : null;
@@ -713,7 +724,7 @@ async function findAccessibleProjects(workspaceId, membership, userId, organizat
 
 const list = asyncHandler(async (req, res) => {
   const { membership, organization } = await loadWorkspace(req.params.workspaceId, req.user._id);
-  const projects = await findAccessibleProjects(req.params.workspaceId, membership, req.user._id, organization, req.user);
+  const projects = await findAccessibleProjects(req.params.workspaceId, membership, req.user._id, organization, req.user, req.query.includeArchived === "true");
   res.json({ projects: await statsForProjects(projects) });
 });
 
@@ -733,12 +744,18 @@ const create = asyncHandler(async (req, res) => {
   if (req.body.status === "completed") {
     throw new AppError("Projects must complete the workflow before being marked complete", 409);
   }
+  const projectStartDate = parseDate(req.body.startDate);
+  const projectDueDate = parseDate(req.body.dueDate);
+  if (projectStartDate && projectDueDate && projectDueDate < projectStartDate) {
+    throw new AppError("Project start date must be on or before its due date", 400);
+  }
   const project = await Project.create({
     workspace: workspace._id,
     name: req.body.name,
     description: req.body.description || "",
     status: req.body.status || "active",
-    dueDate: parseDate(req.body.dueDate) || undefined,
+    startDate: projectStartDate || undefined,
+    dueDate: projectDueDate || undefined,
     projectManager: membership.role === "project_manager" || organizationMembership?.role === "project_manager" ? req.user._id : null,
     owner: req.user._id,
     createdBy: req.user._id,
@@ -819,6 +836,7 @@ const getBoard = asyncHandler(async (req, res) => {
 
 const updateProject = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organization, organizationMembership } = await loadProject(req);
+  requireActiveProject(project);
   const canManageProject = canManageAssignedProject(project, membership, req.user._id, organizationMembership);
   if (!canManageProject) requireManager(membership, organizationMembership);
   const io = req.app.get("io");
@@ -839,6 +857,15 @@ const updateProject = asyncHandler(async (req, res) => {
       project.dueDate = dueDate;
       changes.push("changed the due date");
     }
+  }
+  if (req.body.startDate !== undefined) {
+    const startDate = parseDate(req.body.startDate) || undefined;
+    if (startDate && project.dueDate && startDate > project.dueDate) throw new AppError("Project start date must be on or before its due date", 400);
+    project.startDate = startDate;
+    changes.push("changed the start date");
+  }
+  if (project.startDate && project.dueDate && project.startDate > project.dueDate) {
+    throw new AppError("Project start date must be on or before its due date", 400);
   }
   if (req.body.status !== undefined && req.body.status !== previousStatus) {
     if (req.body.status === "completed" && project.workflowStage !== "completed") {
@@ -1039,6 +1066,28 @@ const removeProject = asyncHandler(async (req, res) => {
   res.json({ ok: true });
 });
 
+const archiveProject = asyncHandler(async (req, res) => {
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireManager(membership, organizationMembership);
+  if (!project.archivedAt) {
+    project.archivedAt = new Date();
+    project.archivedBy = req.user._id;
+    await project.save();
+  }
+  emitToProjectWorkspace(req.app.get("io"), workspace.members, project, "project:updated", { project: project.toObject() });
+  res.json({ project });
+});
+
+const restoreProject = asyncHandler(async (req, res) => {
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireManager(membership, organizationMembership);
+  project.archivedAt = null;
+  project.archivedBy = null;
+  await project.save();
+  emitToProjectWorkspace(req.app.get("io"), workspace.members, project, "project:updated", { project: project.toObject() });
+  res.json({ project });
+});
+
 /* ------------------------------------------------------------------ */
 /* Tasks                                                               */
 /* ------------------------------------------------------------------ */
@@ -1056,6 +1105,7 @@ function notifyAssignees(io, { workspace, project, task, actor, ids, title, type
 
 const createTask = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   requireTaskWorkStage(project, membership, req.user._id, organizationMembership);
   const io = req.app.get("io");
@@ -1123,6 +1173,7 @@ const createTask = asyncHandler(async (req, res) => {
 
 const updateTask = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   requireTaskWorkStage(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.taskId, "task id");
@@ -1249,6 +1300,7 @@ const updateTask = asyncHandler(async (req, res) => {
 
 const reorderTasks = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   requireTaskWorkStage(project, membership, req.user._id, organizationMembership);
 
@@ -1580,6 +1632,7 @@ const removeMilestone = asyncHandler(async (req, res) => {
 
 const removeTask = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   requireTaskWorkStage(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.taskId, "task id");
@@ -1617,6 +1670,7 @@ const removeTask = asyncHandler(async (req, res) => {
 
 const addComment = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   assertObjectId(req.params.taskId, "task id");
   const task = await Task.findOne({ _id: req.params.taskId, project: project._id });
@@ -1656,6 +1710,7 @@ const addComment = asyncHandler(async (req, res) => {
 
 const removeComment = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   assertObjectId(req.params.taskId, "task id");
   const task = await Task.findOne({ _id: req.params.taskId, project: project._id });
@@ -1674,6 +1729,24 @@ const removeComment = asyncHandler(async (req, res) => {
     projectId: String(project._id),
     task,
   });
+  res.json({ task });
+});
+
+const updateComment = asyncHandler(async (req, res) => {
+  const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  requireActiveProject(project);
+  requireWritableMember(membership, organizationMembership);
+  const task = await Task.findOne({ _id: req.params.taskId, project: project._id });
+  if (!task) throw new AppError("Task not found", 404);
+  const comment = task.comments.id(req.params.commentId);
+  if (!comment) throw new AppError("Comment not found", 404);
+  if (String(comment.author) !== String(req.user._id) && !canManageAssignedProject(project, membership, req.user._id, organizationMembership)) {
+    throw new AppError("You can only edit your own comments", 403);
+  }
+  comment.body = req.body.body;
+  await task.save();
+  await populateTask(task);
+  emitToProjectWorkspace(req.app.get("io"), workspace.members, project, "task:updated", { type: "updated", projectId: String(project._id), task });
   res.json({ task });
 });
 
@@ -1803,6 +1876,7 @@ module.exports = {
   milestoneUpdateSchema,
   emptyBodySchema,
   commentSchema,
+  commentUpdateSchema,
   list,
   create,
   getBoard,
@@ -1810,6 +1884,8 @@ module.exports = {
   addProjectTeamMembers,
   transitionWorkflow,
   removeProject,
+  archiveProject,
+  restoreProject,
   createTask,
   updateTask,
   reorderTasks,
@@ -1826,6 +1902,7 @@ module.exports = {
   removeTask,
   addComment,
   removeComment,
+  updateComment,
   projectActivity,
   myTasks,
   dashboard,

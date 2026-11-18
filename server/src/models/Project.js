@@ -56,6 +56,8 @@ const projectMilestoneSchema = new mongoose.Schema(
     dueDate: { type: Date },
     progress: { type: Number, min: 0, max: 100, default: 0 },
     completedAt: { type: Date },
+    archivedAt: { type: Date, default: null },
+    archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: true }
 );
