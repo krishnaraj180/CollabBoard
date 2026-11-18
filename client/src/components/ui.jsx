@@ -23,7 +23,7 @@ export function Avatar({ user, size = 28 }) {
     <span
       className="avatar"
       title={user.name}
-      style={{ background: user.avatarColor || "#c45c26", width: size, height: size, fontSize: size * 0.4 }}
+      style={{ background: user.avatarColor || "#c45c26", width: size, height: size, fontSize: size * 0.4, ...(user.avatarUrl ? { backgroundImage: `url(${user.avatarUrl})`, backgroundSize: "cover", color: "transparent" } : {}) }}
     >
       {initials(user.name)}
     </span>

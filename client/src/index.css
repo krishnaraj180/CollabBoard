@@ -299,6 +299,8 @@ textarea { resize: vertical; width: 100%; }
 .swatches { display: flex; gap: 8px; flex-wrap: wrap; }
 .swatch { width: 30px; height: 30px; border-radius: 50%; border: 3px solid var(--card); box-shadow: 0 0 0 1px var(--line); padding: 0; }
 .swatch.on { box-shadow: 0 0 0 2px var(--accent); }
+.session-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.session-row:first-of-type { border-top: 0; }
 .inline-create { display: flex; gap: 8px; margin-bottom: 20px; max-width: 560px; }
 .inline-create input { flex: 1; }
 
