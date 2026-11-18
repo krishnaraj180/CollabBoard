@@ -3,9 +3,11 @@ const path = require("path");
 const Channel = require("../models/Channel");
 const Message = require("../models/Message");
 const Workspace = require("../models/Workspace");
+const Organization = require("../models/Organization");
 const { dest } = require("../middleware/upload");
 const { AppError, asyncHandler } = require("../utils/errors");
 const { requireMember } = require("../utils/access");
+const { organizationMemberOf } = require("../utils/organizationAccess");
 
 const ALLOWED = /^[\w.\-]+$/;
 
@@ -20,6 +22,12 @@ const serve = asyncHandler(async (req, res) => {
     Channel.findOne({ _id: message.channel, workspace: message.workspace }),
   ]);
   if (!workspace || !channel) throw new AppError("File not found", 404);
+  if (workspace.organizationId) {
+    const organization = await Organization.findById(workspace.organizationId).select("status members");
+    if (!organization || organization.status !== "active" || !await organizationMemberOf(organization, req.user._id)) {
+      throw new AppError("File not found", 404);
+    }
+  }
   requireMember(workspace, req.user._id);
   if (!channel.members.some((id) => String(id) === String(req.user._id))) {
     throw new AppError("You are not a member of this channel", 403);

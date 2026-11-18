@@ -11,6 +11,8 @@ const { notifyUsers } = require("../utils/notify");
 const { logActivity } = require("../utils/activity");
 const { DEFAULT_DEPARTMENTS } = require("../utils/organization");
 const { ASSIGNABLE_WORKSPACE_ROLES } = require("../utils/access");
+const { resolveTenantFromParent } = require("../utils/organizationAccess");
+const { secureBody } = require("../utils/inputSecurity");
 
 const TEAM_LEAD_INVITE_ROLES = {
   team_lead: ["frontend_developer", "backend_developer", "react_developer", "ui_developer", "nodejs_developer", "java_developer", "python_developer"],
@@ -22,10 +24,10 @@ const TEAM_LEAD_INVITE_ROLES = {
 };
 
 const createSchema = z.object({
-  body: z.object({
+  body: secureBody(z.object({
     name: z.string().min(2).max(80),
     description: z.string().max(400).optional().default(""),
-  }),
+  })),
 });
 
 const updateSchema = z.object({
@@ -79,6 +81,7 @@ async function ensureGeneralChannel(workspace, userId) {
   const existing = await Channel.findOne({ workspace: workspace._id, type: "group", name: "general" });
   if (existing) return existing;
   return Channel.create({
+    organizationId: resolveTenantFromParent(workspace),
     workspace: workspace._id,
     type: "group",
     name: "general",
@@ -88,15 +91,11 @@ async function ensureGeneralChannel(workspace, userId) {
 }
 
 const list = asyncHandler(async (req, res) => {
-  const ownedOrganizations = await Organization.find({
-    members: { $elemMatch: { user: req.user._id, role: "organization_admin" } },
-  }).select("_id").lean();
-  const workspaces = await Workspace.find({
-    $or: [
-      { "members.user": req.user._id },
-      { organizationId: { $in: ownedOrganizations.map((organization) => organization._id) } },
-    ],
-  }).populate(
+  const organizations = await Organization.find({ status: "active", members: { $elemMatch: { user: req.user._id, status: { $in: ["active", null] } } } }).select("_id").lean();
+  const query = req.user.platformRole === "super_admin"
+    ? {}
+    : { $or: [{ organizationId: null, "members.user": req.user._id }, { organizationId: { $in: organizations.map((organization) => organization._id) } }] };
+  const workspaces = await Workspace.find(query).populate(
     "members.user",
     "name email avatarColor lastSeenAt"
   );
@@ -238,6 +237,7 @@ const invite = asyncHandler(async (req, res) => {
   }
 
   await notifyUsers(req.app.get("io"), [invitee._id], {
+    resource: workspace,
     type: "workspace.invite",
     title: `Added to ${workspace.name}`,
     body: `${req.user.name} invited you as ${req.body.role}`,
@@ -246,6 +246,7 @@ const invite = asyncHandler(async (req, res) => {
 
   await logActivity(req.app.get("io"), {
     workspace: workspace._id,
+    tenantParent: workspace,
     actor: req.user,
     action: "member.invited",
     summary: `added ${invitee.name} as ${req.body.role}`,
@@ -289,11 +290,13 @@ const updateRole = asyncHandler(async (req, res) => {
   const changed = await User.findById(req.params.userId).select("name");
   await logActivity(req.app.get("io"), {
     workspace: workspace._id,
+    tenantParent: workspace,
     actor: req.user,
     action: "member.role",
     summary: `changed ${changed?.name || "a member"} to ${req.body.role}`,
   });
   await notifyUsers(req.app.get("io"), [req.params.userId], {
+    resource: workspace,
     type: "workspace.role",
     title: `Your role in ${workspace.name} changed`,
     body: `${req.user.name} made you ${req.body.role}`,
@@ -400,6 +403,7 @@ const removeMember = asyncHandler(async (req, res) => {
   const removed = await User.findById(targetId).select("name");
   await logActivity(req.app.get("io"), {
     workspace: workspace._id,
+    tenantParent: workspace,
     actor: req.user,
     action: "member.removed",
     summary: `removed ${removed?.name || "a member"}`,

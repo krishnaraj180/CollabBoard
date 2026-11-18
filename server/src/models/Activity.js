@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const activitySchema = new mongoose.Schema(
   {
+    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: "Organization", default: null, index: true },
     workspace: { type: mongoose.Schema.Types.ObjectId, ref: "Workspace", required: true, index: true },
     project: { type: mongoose.Schema.Types.ObjectId, ref: "Project", index: true },
     task: { type: mongoose.Schema.Types.ObjectId, ref: "Task", index: true },
@@ -13,5 +14,6 @@ const activitySchema = new mongoose.Schema(
 );
 
 activitySchema.index({ workspace: 1, createdAt: -1 });
+activitySchema.index({ organizationId: 1, workspace: 1, createdAt: -1 }, { background: true });
 
 module.exports = mongoose.model("Activity", activitySchema);
