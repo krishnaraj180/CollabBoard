@@ -6,6 +6,8 @@ const router = express.Router();
 
 router.get("/:id", projects.getBoard);
 router.patch("/:id", validate(projects.projectUpdateSchema), projects.updateProject);
+router.post("/:id/archive", projects.archiveProject);
+router.post("/:id/restore", projects.restoreProject);
 router.post("/:id/team-members", validate(projects.projectTeamMembersSchema), projects.addProjectTeamMembers);
 router.post("/:id/workflow", validate(projects.workflowTransitionSchema), projects.transitionWorkflow);
 router.delete("/:id", projects.removeProject);
@@ -26,5 +28,6 @@ router.patch("/:id/tasks/:taskId", validate(projects.taskUpdateSchema), projects
 router.delete("/:id/tasks/:taskId", projects.removeTask);
 router.post("/:id/tasks/:taskId/comments", validate(projects.commentSchema), projects.addComment);
 router.delete("/:id/tasks/:taskId/comments/:commentId", projects.removeComment);
+router.patch("/:id/tasks/:taskId/comments/:commentId", validate(projects.commentUpdateSchema), projects.updateComment);
 
 module.exports = router;

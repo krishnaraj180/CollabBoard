@@ -469,6 +469,14 @@ export default function Board() {
     }
   }
 
+  async function archiveProject() {
+    if (!window.confirm(`Archive “${project.name}”? Tasks will be preserved and the project can be restored later.`)) return;
+    try {
+      await api(`/api/projects/${projectId}/archive`, { method: "POST" });
+      router.replace(`/app/w/${workspaceId}`);
+    } catch (err) { setError(err.message); }
+  }
+
   const openTask = tasks.find((t) => t._id === openId);
   const canDeleteTask = (t) => canManageProject || t.createdBy?._id === myId;
   const currentWorkflowStage = project?.status === "completed" ? "completed" : project?.workflowStage;
@@ -575,6 +583,10 @@ export default function Board() {
                   </select>
                 </label>
                 <label className="field inline">
+                    <span>Start</span>
+                    <input type="date" value={toInputDate(project.startDate)} onChange={(e) => patchProject({ startDate: e.target.value ? new Date(e.target.value).toISOString() : null })} />
+                  </label>
+                  <label className="field inline">
                   <span>Due</span>
                   <input
                     type="date"
@@ -599,6 +611,7 @@ export default function Board() {
                     <button className="btn danger" onClick={deleteProject}>
                       Delete project
                     </button>
+                    <button className="btn secondary" onClick={archiveProject}>Archive project</button>
                   </>
                 )}
               </div>
