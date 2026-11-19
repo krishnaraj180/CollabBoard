@@ -1,16 +1,24 @@
 const Notification = require("../models/Notification");
-const { emitToUser } = require("../sockets");
+const { emitToUser } = require("../sockets/realtimeEmit");
+const { resolveTenantFromParent } = require("./organizationAccess");
 
 async function notifyUsers(io, userIds, payload) {
   const unique = [...new Set(userIds.map(String))].filter(Boolean);
+  const organizationId = payload.resource ? resolveTenantFromParent(payload.resource) : null;
+  const resourceType = payload.resource?.constructor?.modelName || null;
+  const resourceId = payload.resource?._id || null;
   const docs = await Notification.insertMany(
     unique.map((user) => ({
+      organizationId,
       user,
       type: payload.type,
       title: payload.title,
       body: payload.body || "",
       link: payload.link || "",
-      meta: payload.meta || {},
+      meta: {
+        ...(payload.meta || {}),
+        ...(payload.resource ? { resourceType, resourceId } : {}),
+      },
     }))
   );
   if (!io) return docs;
@@ -23,6 +31,7 @@ async function notifyUsers(io, userIds, payload) {
       link: doc.link,
       read: false,
       createdAt: doc.createdAt,
+      organizationId: organizationId || undefined,
     });
   });
   return docs;

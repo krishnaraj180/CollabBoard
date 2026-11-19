@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const channelSchema = new mongoose.Schema(
   {
+    organizationId: { type: mongoose.Schema.Types.ObjectId, ref: "Organization", default: null, index: true },
     workspace: { type: mongoose.Schema.Types.ObjectId, ref: "Workspace", required: true, index: true },
     type: { type: String, enum: ["group", "dm"], default: "group" },
     name: { type: String, trim: true, maxlength: 80 },
@@ -12,5 +13,6 @@ const channelSchema = new mongoose.Schema(
 );
 
 channelSchema.index({ workspace: 1, type: 1, name: 1 });
+channelSchema.index({ organizationId: 1, workspace: 1, type: 1, name: 1 }, { background: true });
 
 module.exports = mongoose.model("Channel", channelSchema);

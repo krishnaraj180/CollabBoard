@@ -12,9 +12,12 @@ const { PRIORITIES } = Task;
 const { AppError, asyncHandler } = require("../utils/errors");
 const { requireMember, memberOf, isManager, getMemberUserId, canAccessProject } = require("../utils/access");
 const { organizationMemberOf, canAccessOrganizationProject } = require("../utils/organizationAccess");
-const { emitToProjectWorkspace } = require("../sockets");
+const { emitToProjectWorkspace } = require("../sockets/realtimeEmit");
 const { notifyUsers } = require("../utils/notify");
 const { logActivity } = require("../utils/activity");
+const { secureBody } = require("../utils/inputSecurity");
+const { loadTenantResource } = require("../services/tenantAccess");
+const { listScope } = require("../services/tenantAccess");
 
 /* ------------------------------------------------------------------ */
 /* Validation                                                          */
@@ -33,18 +36,18 @@ const checklistField = z
 
 const createSchema = z.object({
   params: z.object({ workspaceId: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     name: z.string().min(2).max(80),
     description: z.string().max(400).optional().default(""),
     status: z.enum(PROJECT_STATUSES).optional(),
     startDate: dateField,
     dueDate: dateField,
-  }),
+  }), ["status"]),
 });
 
 const projectUpdateSchema = z.object({
   params: z.object({ id: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     name: z.string().min(2).max(80).optional(),
     description: z.string().max(400).optional(),
     status: z.enum(PROJECT_STATUSES).optional(),
@@ -59,28 +62,28 @@ const projectUpdateSchema = z.object({
       teamLeadId: z.string(),
       memberIds: z.array(z.string()).max(100).default([]),
     })).max(20).optional(),
-  }),
+  }), ["status"]),
 });
 
 const projectTeamMembersSchema = z.object({
   params: z.object({ id: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     department: z.string().trim().min(1).max(60),
     memberIds: z.array(z.string()).min(1).max(100),
-  }),
+  })),
 });
 
 const workflowTransitionSchema = z.object({
   params: z.object({ id: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     action: z.enum(["approve", "submit", "complete", "request_changes", "pass", "fail", "deploy", "release", "launch"]),
     note: z.string().max(1000).optional().default(""),
-  }),
+  })),
 });
 
 const taskCreateSchema = z.object({
   params: z.object({ id: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     title: z.string().min(1).max(160),
     description: z.string().max(4000).optional().default(""),
     columnId: z.string().optional(),
@@ -93,12 +96,12 @@ const taskCreateSchema = z.object({
     progress: z.number().int().min(0).max(100).optional(),
     sprintId: z.string().nullable().optional(),
     dependencies: z.array(z.string()).max(100).optional(),
-  }),
+  })),
 });
 
 const taskUpdateSchema = z.object({
   params: z.object({ id: z.string(), taskId: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     title: z.string().min(1).max(160).optional(),
     description: z.string().max(4000).optional(),
     columnId: z.string().optional(),
@@ -112,57 +115,57 @@ const taskUpdateSchema = z.object({
     progress: z.number().int().min(0).max(100).optional(),
     sprintId: z.string().nullable().optional(),
     dependencies: z.array(z.string()).max(100).optional(),
-  }),
+  })),
 });
 
 const taskReorderSchema = z.object({
   params: z.object({ id: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     moves: z.array(z.object({
       taskId: z.string(),
       columnId: z.string(),
       order: z.number().int().min(0).max(10000),
     })).min(1).max(500),
-  }),
+  })),
 });
 
 const sprintCreateSchema = z.object({
   params: z.object({ id: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     name: z.string().trim().min(2).max(80),
     goal: z.string().trim().max(1000).optional().default(""),
     startDate: z.string().min(1),
     endDate: z.string().min(1),
-  }),
+  })),
 });
 
 const sprintUpdateSchema = z.object({
   params: z.object({ id: z.string(), sprintId: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     name: z.string().trim().min(2).max(80).optional(),
     goal: z.string().trim().max(1000).optional(),
     startDate: z.string().min(1).optional(),
     endDate: z.string().min(1).optional(),
-  }),
+  })),
 });
 
 const milestoneCreateSchema = z.object({
   params: z.object({ id: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     title: z.string().trim().min(2).max(120),
     description: z.string().trim().max(1000).optional().default(""),
     dueDate: dateField,
-  }),
+  })),
 });
 
 const milestoneUpdateSchema = z.object({
   params: z.object({ id: z.string(), milestoneId: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     title: z.string().trim().min(2).max(120).optional(),
     description: z.string().trim().max(1000).optional(),
     dueDate: dateField,
     progress: z.number().int().min(0).max(100).optional(),
-  }),
+  })),
 });
 
 const emptyBodySchema = z.object({
@@ -172,12 +175,12 @@ const emptyBodySchema = z.object({
 
 const commentSchema = z.object({
   params: z.object({ id: z.string(), taskId: z.string() }),
-  body: z.object({ body: z.string().min(1).max(2000) }),
+  body: secureBody(z.object({ body: z.string().min(1).max(2000) })),
 });
 
 const commentUpdateSchema = z.object({
   params: z.object({ id: z.string(), taskId: z.string(), commentId: z.string() }),
-  body: z.object({ body: z.string().min(1).max(2000) }),
+  body: secureBody(z.object({ body: z.string().min(1).max(2000) })),
 });
 
 /* ------------------------------------------------------------------ */
@@ -258,14 +261,15 @@ async function ensureBacklogColumn(project) {
   await project.save();
 }
 
-async function loadWorkspace(id, userId) {
-  assertObjectId(id, "workspace id");
-  const workspace = await Workspace.findById(id);
-  if (!workspace) throw new AppError("Workspace not found", 404);
+async function loadWorkspace(id, userId, platformRole = null) {
+  const workspace = await loadTenantResource(Workspace, id, { _id: userId, platformRole }, { route: "projects.workspace" });
   const organization = workspace.organizationId ? await Organization.findById(workspace.organizationId) : null;
-  const organizationMembership = organization ? organizationMemberOf(organization, userId) : null;
+  const organizationMembership = organization ? await organizationMemberOf(organization, userId) : null;
+  if (organization && (organization.status !== "active" || (!organizationMembership && platformRole !== "super_admin"))) {
+    throw new AppError("You do not have access to this organization workspace", 403);
+  }
   const membership = memberOf(workspace, userId) || (
-    organizationMembership?.role === "organization_admin"
+    ["organization_admin", "organization_owner"].includes(organizationMembership?.role)
       ? { user: userId, role: "viewer", companyWideAccess: true }
       : null
   );
@@ -275,10 +279,9 @@ async function loadWorkspace(id, userId) {
 
 /** Loads project + workspace and the caller's membership in one go. */
 async function loadProject(req) {
-  assertObjectId(req.params.id, "project id");
-  const project = await Project.findById(req.params.id);
-  if (!project) throw new AppError("Project not found", 404);
-  const { workspace, membership, organization, organizationMembership } = await loadWorkspace(project.workspace, req.user._id);
+  const project = await loadTenantResource(Project, req.params.id, req.user, { populate: "workspace", route: req.originalUrl });
+  const { workspace, membership, organization, organizationMembership } = await loadWorkspace(project.workspace?._id || project.workspace, req.user._id, req.user.platformRole);
+  project._tenantWorkspace = workspace;
   if (!canAccessProject(project, membership, req.user._id) &&
       !canAccessOrganizationProject(project, organizationMembership, req.user._id, req.user.platformRole)) {
     throw new AppError("You are not assigned to this project or its current approval step", 403);
@@ -360,6 +363,7 @@ async function notifyProjectStakeholders(io, workspace, project, actor, update) 
     .filter((member) => canAccessProject(project, member, getMemberUserId(member)))
     .map((member) => getMemberUserId(member));
   await notifyUsers(io, targets.filter((id) => id !== String(actor._id)), {
+    resource: workspace,
     type: "project.update",
     title: `${project.name} was updated`,
     body: `${actor.name} ${update}`,
@@ -579,6 +583,7 @@ const transitionWorkflow = asyncHandler(async (req, res) => {
     });
     await logActivity(req.app.get("io"), {
       workspace: workspace._id,
+      tenantParent: workspace,
       project: project._id,
       projectManager: project.projectManager,
       projectAssignments: project.departmentAssignments,
@@ -625,6 +630,7 @@ const transitionWorkflow = asyncHandler(async (req, res) => {
   }[req.body.action];
   await logActivity(io, {
     workspace: workspace._id,
+    tenantParent: workspace,
     project: project._id,
     projectManager: project.projectManager,
     projectAssignments: project.departmentAssignments,
@@ -711,7 +717,7 @@ async function findAccessibleProjects(workspaceId, membership, userId, organizat
   const projects = await Project.find({ workspace: workspaceId, ...(includeArchived ? {} : { archivedAt: null }) })
     .populate("projectManager", USER_FIELDS)
     .sort({ createdAt: -1 });
-  const organizationMembership = organization ? organizationMemberOf(organization, userId) : null;
+  const organizationMembership = organization ? await organizationMemberOf(organization, userId) : null;
   return projects.filter((project) =>
     canAccessProject(project, membership, userId) ||
     canAccessOrganizationProject(project, organizationMembership, userId, user?.platformRole)
@@ -723,13 +729,13 @@ async function findAccessibleProjects(workspaceId, membership, userId, organizat
 /* ------------------------------------------------------------------ */
 
 const list = asyncHandler(async (req, res) => {
-  const { membership, organization } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  const { membership, organization } = await loadWorkspace(req.params.workspaceId, req.user._id, req.user.platformRole);
   const projects = await findAccessibleProjects(req.params.workspaceId, membership, req.user._id, organization, req.user, req.query.includeArchived === "true");
   res.json({ projects: await statsForProjects(projects) });
 });
 
 const create = asyncHandler(async (req, res) => {
-  const { workspace, membership, organizationMembership } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  const { workspace, membership, organizationMembership } = await loadWorkspace(req.params.workspaceId, req.user._id, req.user.platformRole);
   if (workspace.organizationId) {
     throw new AppError("Company projects must be submitted as proposals and approved by the CEO", 403);
   }
@@ -760,11 +766,13 @@ const create = asyncHandler(async (req, res) => {
     owner: req.user._id,
     createdBy: req.user._id,
   });
+  project._tenantWorkspace = workspace;
   const io = req.app.get("io");
   const [withStats] = await statsForProjects([project]);
   emitToProjectWorkspace(io, workspace.members, project, "project:created", { project: withStats });
   await logActivity(io, {
     workspace: workspace._id,
+    tenantParent: workspace,
     project: project._id,
     projectManager: project.projectManager,
     projectAssignments: project.departmentAssignments,
@@ -957,6 +965,7 @@ const updateProject = asyncHandler(async (req, res) => {
   if (changes.length) {
     await logActivity(io, {
       workspace: workspace._id,
+      tenantParent: workspace,
       project: project._id,
       projectManager: project.projectManager,
       projectAssignments: project.departmentAssignments,
@@ -1020,6 +1029,7 @@ const addProjectTeamMembers = asyncHandler(async (req, res) => {
     summary = `added ${addedMemberIds.length} member${addedMemberIds.length === 1 ? "" : "s"} to ${department}`;
     await logActivity(io, {
       workspace: workspace._id,
+      tenantParent: workspace,
       project: project._id,
       projectManager: project.projectManager,
       projectAssignments: project.departmentAssignments,
@@ -1055,6 +1065,7 @@ const removeProject = asyncHandler(async (req, res) => {
   emitToProjectWorkspace(io, workspace.members, project, "project:deleted", { projectId: String(project._id) });
   await logActivity(io, {
     workspace: workspace._id,
+    tenantParent: workspace,
     projectManager: project.projectManager,
     projectAssignments: project.departmentAssignments,
     workflowStage: project.workflowStage,
@@ -1096,6 +1107,7 @@ function notifyAssignees(io, { workspace, project, task, actor, ids, title, type
   const targets = ids.filter((id) => String(id) !== String(actor._id));
   if (!targets.length) return null;
   return notifyUsers(io, targets, {
+    resource: workspace,
     type,
     title,
     body: `“${task.title}” in ${project.name}`,
@@ -1148,6 +1160,7 @@ const createTask = asyncHandler(async (req, res) => {
   });
   await logActivity(io, {
     workspace: workspace._id,
+    tenantParent: workspace,
     project: project._id,
     projectManager: project.projectManager,
     projectAssignments: project.departmentAssignments,
@@ -1244,6 +1257,7 @@ const updateTask = asyncHandler(async (req, res) => {
 
   const base = {
     workspace: workspace._id,
+    tenantParent: workspace,
     project: project._id,
     task: task._id,
     actor: req.user,
@@ -1344,6 +1358,7 @@ const reorderTasks = asyncHandler(async (req, res) => {
     if (previousColumnId !== move.columnId) {
       await logActivity(io, {
         workspace: workspace._id,
+        tenantParent: workspace,
         project: project._id,
         projectManager: project.projectManager,
         projectAssignments: project.departmentAssignments,
@@ -1381,6 +1396,7 @@ async function recordPlanningUpdate(req, workspace, project, event, data, action
   });
   await logActivity(io, {
     workspace: workspace._id,
+    tenantParent: workspace,
     project: project._id,
     projectManager: project.projectManager,
     projectAssignments: project.departmentAssignments,
@@ -1655,6 +1671,7 @@ const removeTask = asyncHandler(async (req, res) => {
   });
   await logActivity(io, {
     workspace: workspace._id,
+    tenantParent: workspace,
     project: project._id,
     projectManager: project.projectManager,
     projectAssignments: project.departmentAssignments,
@@ -1686,6 +1703,7 @@ const addComment = asyncHandler(async (req, res) => {
   });
   await logActivity(io, {
     workspace: workspace._id,
+    tenantParent: workspace,
     project: project._id,
     projectManager: project.projectManager,
     projectAssignments: project.departmentAssignments,
@@ -1752,7 +1770,8 @@ const updateComment = asyncHandler(async (req, res) => {
 
 const projectActivity = asyncHandler(async (req, res) => {
   const { project } = await loadProject(req);
-  const items = await Activity.find({ project: project._id })
+  const { organizationIds } = await listScope(req.user._id);
+  const items = await Activity.find({ project: project._id, organizationId: { $in: [...organizationIds, null] } })
     .sort({ createdAt: -1 })
     .limit(40)
     .populate("actor", "name avatarColor");
@@ -1764,7 +1783,7 @@ const projectActivity = asyncHandler(async (req, res) => {
 /* ------------------------------------------------------------------ */
 
 const myTasks = asyncHandler(async (req, res) => {
-  const { workspace, organization } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  const { workspace, organization } = await loadWorkspace(req.params.workspaceId, req.user._id, req.user.platformRole);
   const membership = workspace.members.find((member) => getMemberUserId(member) === String(req.user._id));
   const accessibleProjects = await findAccessibleProjects(workspace._id, membership, req.user._id, organization, req.user);
   const taskQuery = {
@@ -1792,7 +1811,7 @@ const myTasks = asyncHandler(async (req, res) => {
 });
 
 const dashboard = asyncHandler(async (req, res) => {
-  const { workspace, membership, organization, organizationMembership } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  const { workspace, membership, organization, organizationMembership } = await loadWorkspace(req.params.workspaceId, req.user._id, req.user.platformRole);
   const projects = await findAccessibleProjects(workspace._id, membership, req.user._id, organization, req.user);
   const projectIds = projects.map((project) => project._id);
   const [tasks, activity] = await Promise.all([
@@ -1800,6 +1819,7 @@ const dashboard = asyncHandler(async (req, res) => {
     Activity.find({
       workspace: workspace._id,
       project: { $in: projectIds },
+      organizationId: { $in: [workspace.organizationId, null] },
     })
       .sort({ createdAt: -1 })
       .limit(15)
@@ -1849,11 +1869,12 @@ const dashboard = asyncHandler(async (req, res) => {
 });
 
 const workspaceActivity = asyncHandler(async (req, res) => {
-  const { workspace, membership, organization } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  const { workspace, membership, organization } = await loadWorkspace(req.params.workspaceId, req.user._id, req.user.platformRole);
   const projects = await findAccessibleProjects(workspace._id, membership, req.user._id, organization, req.user);
   const query = {
     workspace: workspace._id,
     project: { $in: projects.map((project) => project._id) },
+    organizationId: { $in: [workspace.organizationId, null] },
   };
   const items = await Activity.find(query)
     .sort({ createdAt: -1 })

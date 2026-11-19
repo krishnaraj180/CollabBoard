@@ -4,9 +4,16 @@ const { env } = require("./config/env");
 const { connectDb, disconnectDb } = require("./config/db");
 const { createApp } = require("./app");
 const { attachSockets } = require("./sockets");
+const { assertTenantReady } = require("./services/tenantStartupCheck");
 
 async function main() {
   await connectDb();
+  if (env.tenantEnforcement === "on") {
+    await assertTenantReady({ override: env.tenantEnforcementOverride });
+    if (env.tenantEnforcementOverride) {
+      setInterval(() => assertTenantReady({ override: true }).catch((error) => console.error(error.message)), 60 * 60 * 1000).unref();
+    }
+  }
   const app = createApp();
   const server = http.createServer(app);
   const io = new Server(server, {

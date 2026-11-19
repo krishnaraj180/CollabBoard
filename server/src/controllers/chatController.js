@@ -1,24 +1,29 @@
 const { z } = require("zod");
 const Workspace = require("../models/Workspace");
+const Organization = require("../models/Organization");
 const Channel = require("../models/Channel");
 const Message = require("../models/Message");
 const { AppError, asyncHandler } = require("../utils/errors");
 const { requireMember, getMemberUserId } = require("../utils/access");
-const { emitToChannel, emitToWorkspace } = require("../sockets");
+const { organizationMemberOf } = require("../utils/organizationAccess");
+const { emitToChannel, emitToWorkspace } = require("../sockets/realtimeEmit");
 const { notifyUsers } = require("../utils/notify");
+const { resolveTenantFromParent } = require("../utils/organizationAccess");
+const { secureBody } = require("../utils/inputSecurity");
+const { loadTenantResource } = require("../services/tenantAccess");
 
 const channelSchema = z.object({
   params: z.object({ workspaceId: z.string() }),
-  body: z.object({
+  body: secureBody(z.object({
     name: z.string().min(2).max(80),
     memberIds: z.array(z.string()).optional().default([]),
     type: z.enum(["group", "dm"]).optional().default("group"),
-  }),
+  })),
 });
 
 const messageUpdateSchema = z.object({
   params: z.object({ channelId: z.string(), messageId: z.string() }),
-  body: z.object({ body: z.string().min(1).max(4000) }),
+  body: secureBody(z.object({ body: z.string().min(1).max(4000) })),
 });
 
 const messageReadSchema = z.object({
@@ -26,8 +31,13 @@ const messageReadSchema = z.object({
 });
 
 async function loadWorkspace(id, userId) {
-  const workspace = await Workspace.findById(id);
-  if (!workspace) throw new AppError("Workspace not found", 404);
+  const workspace = await loadTenantResource(Workspace, id?._id || id, { _id: userId }, { route: "chat.workspace" });
+  if (workspace.organizationId) {
+    const organization = await Organization.findById(workspace.organizationId).select("status members");
+    if (!organization || organization.status !== "active" || !await organizationMemberOf(organization, userId)) {
+      throw new AppError("You do not have access to this organization workspace", 403);
+    }
+  }
   const membership = requireMember(workspace, userId);
   return { workspace, membership };
 }
@@ -65,6 +75,7 @@ const createChannel = asyncHandler(async (req, res) => {
     if (!workspaceIds.has(id)) throw new AppError("Channel members must belong to the workspace", 400);
   }
   const channel = await Channel.create({
+    organizationId: resolveTenantFromParent(workspace),
     workspace: workspace._id,
     type: req.body.type || "group",
     name: req.body.type === "dm" ? "Direct message" : req.body.name,
@@ -72,13 +83,12 @@ const createChannel = asyncHandler(async (req, res) => {
     createdBy: req.user._id,
   });
   await channel.populate("members", "name email avatarColor");
-  emitToWorkspace(req.app.get("io"), workspace._id, "channel:created", { channel });
+  emitToWorkspace(req.app.get("io"), workspace, "channel:created", { channel });
   res.status(201).json({ channel });
 });
 
 const listMessages = asyncHandler(async (req, res) => {
-  const channel = await Channel.findById(req.params.channelId);
-  if (!channel) throw new AppError("Channel not found", 404);
+  const channel = await loadTenantResource(Channel, req.params.channelId, req.user, { populate: "workspace", route: req.originalUrl });
   await loadWorkspace(channel.workspace, req.user._id);
   assertChannelMember(channel, req.user._id);
   const limit = Math.min(Number(req.query.limit || 50), 100);
@@ -93,9 +103,8 @@ const listMessages = asyncHandler(async (req, res) => {
 });
 
 const createMessage = asyncHandler(async (req, res) => {
-  const channel = await Channel.findById(req.params.channelId);
-  if (!channel) throw new AppError("Channel not found", 404);
-  const { membership } = await loadWorkspace(channel.workspace, req.user._id);
+  const channel = await loadTenantResource(Channel, req.params.channelId, req.user, { populate: "workspace", route: req.originalUrl });
+  const { workspace, membership } = await loadWorkspace(channel.workspace, req.user._id);
   requireWritableMember(membership);
   assertChannelMember(channel, req.user._id);
 
@@ -112,6 +121,7 @@ const createMessage = asyncHandler(async (req, res) => {
   }
 
   const message = await Message.create({
+    organizationId: resolveTenantFromParent(workspace),
     workspace: channel.workspace,
     channel: channel._id,
     sender: req.user._id,
@@ -122,10 +132,11 @@ const createMessage = asyncHandler(async (req, res) => {
   await message.populate("sender", "name email avatarColor");
 
   const payload = { message };
-  emitToChannel(req.app.get("io"), channel._id, "chat:message", payload);
+  emitToChannel(req.app.get("io"), channel, "chat:message", payload);
 
   const others = channel.members.filter((id) => String(id) !== String(req.user._id));
   await notifyUsers(req.app.get("io"), others, {
+    resource: workspace,
     type: "chat.message",
     title: channel.name || "Direct message",
     body: `${req.user.name}: ${body || "sent a file"}`,
@@ -137,12 +148,10 @@ const createMessage = asyncHandler(async (req, res) => {
 });
 
 async function loadMessage(req) {
-  const channel = await Channel.findById(req.params.channelId);
-  if (!channel) throw new AppError("Channel not found", 404);
+  const channel = await loadTenantResource(Channel, req.params.channelId, req.user, { populate: "workspace", route: req.originalUrl });
   const { membership } = await loadWorkspace(channel.workspace, req.user._id);
   assertChannelMember(channel, req.user._id);
-  const message = await Message.findOne({ _id: req.params.messageId, channel: channel._id });
-  if (!message) throw new AppError("Message not found", 404);
+  const message = await loadTenantResource(Message, req.params.messageId, req.user, { populate: { path: "channel", populate: { path: "workspace" } }, route: req.originalUrl });
   return { channel, membership, message };
 }
 
@@ -154,7 +163,7 @@ const updateMessage = asyncHandler(async (req, res) => {
   message.editedAt = new Date();
   await message.save();
   await message.populate("sender", "name email avatarColor");
-  emitToChannel(req.app.get("io"), channel._id, "chat:message-updated", { message });
+  emitToChannel(req.app.get("io"), channel, "chat:message-updated", { message });
   res.json({ message });
 });
 
@@ -168,7 +177,7 @@ const deleteMessage = asyncHandler(async (req, res) => {
   message.attachments = [];
   message.deletedAt = new Date();
   await message.save();
-  emitToChannel(req.app.get("io"), channel._id, "chat:message-deleted", { messageId: String(message._id), channelId: String(channel._id) });
+  emitToChannel(req.app.get("io"), channel, "chat:message-deleted", { messageId: String(message._id), channelId: String(channel._id) });
   res.json({ ok: true });
 });
 
@@ -177,7 +186,7 @@ const markMessageRead = asyncHandler(async (req, res) => {
   if (!message.readBy.some((id) => String(id) === String(req.user._id))) {
     message.readBy.push(req.user._id);
     await message.save();
-    emitToChannel(req.app.get("io"), channel._id, "chat:read", { channelId: String(channel._id), messageId: String(message._id), userId: String(req.user._id) });
+    emitToChannel(req.app.get("io"), channel, "chat:read", { channelId: String(channel._id), messageId: String(message._id), userId: String(req.user._id) });
   }
   res.json({ ok: true });
 });

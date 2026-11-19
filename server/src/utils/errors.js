@@ -1,4 +1,5 @@
 const fs = require("fs");
+const { TenantAccessError } = require("./tenantErrors");
 
 class AppError extends Error {
   constructor(message, status = 400, details) {
@@ -39,6 +40,11 @@ function errorHandler(err, req, res, next) {
 
   if (err.name === "ValidationError") {
     return res.status(400).json({ error: err.message });
+  }
+
+  if (err instanceof TenantAccessError) {
+    if (err.status === 404) return res.status(404).json({ error: "Resource not found", code: "RESOURCE_NOT_FOUND" });
+    return res.status(err.status).json({ error: err.message, code: err.code });
   }
 
   if (err.code === 11000) {

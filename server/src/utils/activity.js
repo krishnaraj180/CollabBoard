@@ -1,5 +1,6 @@
 const Activity = require("../models/Activity");
-const { emitToWorkspace, emitToProjectWorkspace } = require("../sockets");
+const { emitToWorkspace, emitToProjectWorkspace } = require("../sockets/realtimeEmit");
+const { resolveTenantFromParent } = require("./organizationAccess");
 
 /** Record an activity and scope project events to the assigned project manager. */
 async function logActivity(io, {
@@ -13,11 +14,14 @@ async function logActivity(io, {
   projectAssignments,
   workflowStage,
   workspaceMembers,
+  tenantParent,
 }) {
-  const doc = await Activity.create({ workspace, project, task, actor: actor._id || actor, action, summary });
+  const workspaceId = workspace?._id || workspace;
+  const organizationId = resolveTenantFromParent(tenantParent);
+  const doc = await Activity.create({ organizationId, workspace: workspaceId, project, task, actor: actor._id || actor, action, summary });
   const payload = {
     _id: doc._id,
-    workspace: String(workspace),
+    workspace: String(workspaceId),
     project: project ? String(project) : undefined,
     task: task ? String(task) : undefined,
     action,
@@ -28,12 +32,14 @@ async function logActivity(io, {
   if (io) {
     if (workspaceMembers) {
       emitToProjectWorkspace(io, workspaceMembers, {
+        _id: project,
+        _tenantWorkspace: tenantParent,
         projectManager,
         departmentAssignments: projectAssignments,
         workflowStage,
       }, "activity:new", payload);
     } else {
-      emitToWorkspace(io, workspace, "activity:new", payload);
+      emitToWorkspace(io, tenantParent, "activity:new", payload);
     }
   }
   return payload;

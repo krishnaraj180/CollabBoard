@@ -11,7 +11,7 @@ try {
 
 async function connectDb(uri = env.mongoUri) {
   mongoose.set("strictQuery", true);
-  await mongoose.connect(uri);
+  await mongoose.connect(uri, { autoIndex: !env.isProd });
 }
 
 async function disconnectDb() {

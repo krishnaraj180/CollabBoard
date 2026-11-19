@@ -43,8 +43,8 @@ describe("organizations", () => {
       user: { email: "org-owner@example.com" },
     });
     expect((await request(app).get(`/api/organizations/${organizationId}`).set("Cookie", owner)).status).toBe(200);
-    expect((await request(app).get(`/api/organizations/${organizationId}`).set("Cookie", stranger)).status).toBe(403);
-    expect((await request(app).patch(`/api/organizations/${organizationId}`).set("Cookie", stranger).send({ name: "Hijacked" })).status).toBe(403);
+    expect((await request(app).get(`/api/organizations/${organizationId}`).set("Cookie", stranger)).status).toBe(404);
+    expect((await request(app).patch(`/api/organizations/${organizationId}`).set("Cookie", stranger).send({ name: "Hijacked" })).status).toBe(404);
     expect((await request(app).get("/api/organizations").set("Cookie", stranger)).body.organizations).toHaveLength(0);
   });
 
@@ -344,7 +344,7 @@ describe("organizations", () => {
     expect(workload.body.workspaceCount).toBe(1);
     expect(workload.body.workload.find((item) => item.user.email === "workload-pm@example.com"))
       .toMatchObject({ pending: 1, overdue: 1, completed: 0 });
-    expect((await request(app).get(`/api/organizations/${organizationId}/workload`).set("Cookie", outsider)).status).toBe(403);
+    expect((await request(app).get(`/api/organizations/${organizationId}/workload`).set("Cookie", outsider)).status).toBe(404);
   });
 
   test("organization team leads manage assigned teams and developers can edit assigned project tasks", async () => {

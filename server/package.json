@@ -7,7 +7,10 @@
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
     "test": "jest --runInBand --detectOpenHandles --forceExit",
-    "grant-super-admin": "node src/scripts/grantSuperAdmin.js"
+    "grant-super-admin": "node src/scripts/grantSuperAdmin.js",
+    "migrate:tenant": "node src/scripts/migrateTenantFoundation.js",
+    "indexes:tenant": "node src/scripts/buildTenantIndexes.js",
+    "verify:tenant": "node src/scripts/verifyTenantConsistency.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

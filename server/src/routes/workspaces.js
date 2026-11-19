@@ -3,11 +3,13 @@ const { validate } = require("../middleware/validate");
 const workspaces = require("../controllers/workspaceController");
 const projects = require("../controllers/projectController");
 const chat = require("../controllers/chatController");
+const { resolveWorkspaceContext } = require("../middleware/workspaceContext");
 
 const router = express.Router();
 
 router.get("/", workspaces.list);
 router.post("/", validate(workspaces.createSchema), workspaces.create);
+router.use("/:id", resolveWorkspaceContext);
 router.get("/:id", workspaces.getOne);
 router.patch("/:id", validate(workspaces.updateSchema), workspaces.update);
 router.post("/:id/invites", validate(workspaces.inviteSchema), workspaces.invite);

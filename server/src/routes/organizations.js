@@ -1,12 +1,14 @@
 const express = require("express");
 const { validate } = require("../middleware/validate");
 const organizations = require("../controllers/organizationController");
+const { resolveOrganizationContext } = require("../middleware/organizationContext");
 
 const router = express.Router();
 
 router.post("/", validate(organizations.createSchema), organizations.create);
 router.get("/", organizations.list);
 router.post("/invitations/accept", validate(organizations.acceptInvitationSchema), organizations.acceptInvitation);
+router.use("/:id", resolveOrganizationContext);
 router.get("/:id", organizations.getOne);
 router.patch("/:id", validate(organizations.updateSchema), organizations.update);
 router.get("/:id/proposals", organizations.listProposals);

@@ -49,7 +49,7 @@ export default function Organizations() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [createForm, setCreateForm] = useState({ name: "", description: "", website: "" });
+  const [createForm, setCreateForm] = useState({ name: "", industry: "", companySize: "", description: "", website: "" });
   const [profile, setProfile] = useState({ name: "", description: "", website: "", defaultTaskCapacity: 10 });
   const [inviteForm, setInviteForm] = useState({ email: "", role: "viewer" });
   const [departmentForm, setDepartmentForm] = useState({ name: "", description: "", positions: "" });
@@ -183,7 +183,7 @@ export default function Organizations() {
       const data = await api("/api/organizations", { method: "POST", body: createForm });
       setOrganizations((items) => [...items, data.organization]);
       setOrganizationId(data.organization._id);
-      setCreateForm({ name: "", description: "", website: "" });
+      setCreateForm({ name: "", industry: "", companySize: "", description: "", website: "" });
       flash("Organization created");
     } catch (err) {
       setError(err.message);
@@ -401,6 +401,8 @@ export default function Organizations() {
                   <span>Name</span>
                   <input value={createForm.name} onChange={(event) => setCreateForm({ ...createForm, name: event.target.value })} required minLength={2} maxLength={80} />
                 </label>
+                <label className="field"><span>Industry</span><input value={createForm.industry} onChange={(event) => setCreateForm({ ...createForm, industry: event.target.value })} maxLength={80} /></label>
+                <label className="field"><span>Company size</span><input value={createForm.companySize} onChange={(event) => setCreateForm({ ...createForm, companySize: event.target.value })} maxLength={40} placeholder="e.g. 11–50" /></label>
                 <label className="field">
                   <span>Description</span>
                   <textarea rows={2} value={createForm.description} onChange={(event) => setCreateForm({ ...createForm, description: event.target.value })} maxLength={500} />

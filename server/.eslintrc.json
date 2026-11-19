@@ -1,0 +1,17 @@
+{
+  "env": {
+    "node": true,
+    "jest": true,
+    "es2022": true
+  },
+  "parserOptions": {
+    "ecmaVersion": "latest"
+  },
+  "extends": [],
+  "rules": {
+    "no-const-assign": "error",
+    "no-duplicate-case": "error",
+    "no-unreachable": "error",
+    "no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }]
+  }
+}
