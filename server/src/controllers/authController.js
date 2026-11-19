@@ -10,7 +10,7 @@ const {
   SESSION_POLICIES,
   sessionCookieMaxAge,
 } = require("../utils/tokens");
-const { emitToUser } = require("../sockets");
+const { emitToUser } = require("../sockets/realtimeEmit");
 const crypto = require("crypto");
 const { sendPasswordResetEmail } = require("../utils/mailer");
 const { sendEmailVerificationEmail } = require("../utils/mailer");

@@ -1,5 +1,5 @@
 const Notification = require("../models/Notification");
-const { emitToUser } = require("../sockets");
+const { emitToUser } = require("../sockets/realtimeEmit");
 const { resolveTenantFromParent } = require("./organizationAccess");
 
 async function notifyUsers(io, userIds, payload) {
@@ -31,6 +31,7 @@ async function notifyUsers(io, userIds, payload) {
       link: doc.link,
       read: false,
       createdAt: doc.createdAt,
+      organizationId: organizationId || undefined,
     });
   });
   return docs;

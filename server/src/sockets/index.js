@@ -6,9 +6,9 @@ const Workspace = require("../models/Workspace");
 const Channel = require("../models/Channel");
 const { env } = require("../config/env");
 const { COOKIE } = require("../utils/tokens");
-const { memberOf, getMemberUserId, canAccessProject } = require("../utils/access");
-
-const socketsByUser = new Map();
+const { memberOf, getMemberUserId } = require("../utils/access");
+const { configure, userRoom, sessionRoom, onlineIds, isOnline } = require("./realtimeAccess");
+const { emitToWorkspace, emitToProjectWorkspace, emitToChannel, emitToUser, emitToTyping, emitSocket, room, legacyRoom } = require("./realtimeEmit");
 
 function parseCookie(header) {
   const out = {};
@@ -18,29 +18,6 @@ function parseCookie(header) {
     out[k] = decodeURIComponent(rest.join("="));
   });
   return out;
-}
-
-function addSocket(userId, socketId) {
-  const key = String(userId);
-  if (!socketsByUser.has(key)) socketsByUser.set(key, new Set());
-  socketsByUser.get(key).add(socketId);
-}
-
-function removeSocket(userId, socketId) {
-  const key = String(userId);
-  const set = socketsByUser.get(key);
-  if (!set) return 0;
-  set.delete(socketId);
-  if (set.size === 0) socketsByUser.delete(key);
-  return set.size;
-}
-
-function isOnline(userId) {
-  return socketsByUser.has(String(userId));
-}
-
-function onlineIds() {
-  return [...socketsByUser.keys()];
 }
 
 async function findAuthorizedChannel(channelId, userId) {
@@ -53,6 +30,7 @@ async function findAuthorizedChannel(channelId, userId) {
 }
 
 function attachSockets(io) {
+  configure(io);
   io.use(async (socket, next) => {
     try {
       const cookies = parseCookie(socket.handshake.headers.cookie);
@@ -70,7 +48,8 @@ function attachSockets(io) {
         session.lastActivityAt = new Date();
         await session.save();
       }
-      socket.user = user;
+      socket.data.userId = String(user._id);
+      socket.data.tokenVersion = user.tokenVersion;
       socket.data.sessionId = payload.sid || null;
       socket.data.authExpiresAt = payload.exp ? payload.exp * 1000 : null;
       next();
@@ -80,8 +59,7 @@ function attachSockets(io) {
   });
 
   io.on("connection", async (socket) => {
-    const user = socket.user;
-    let workspaces = [];
+    const userId = socket.data.userId;
     let sessionExpiryTimer;
     let sessionValidationTimer;
     const enforceSessionExpiry = () => {
@@ -89,7 +67,7 @@ function attachSockets(io) {
       if (!expiresAt) return;
       const remaining = expiresAt - Date.now();
       if (remaining <= 0) {
-        socket.emit("auth:session-expired");
+        emitSocket(socket, "auth:session-expired");
         socket.disconnect(true);
         return;
       }
@@ -98,67 +76,75 @@ function attachSockets(io) {
     socket.on("disconnect", async () => {
       clearTimeout(sessionExpiryTimer);
       clearInterval(sessionValidationTimer);
-      const remaining = removeSocket(user._id, socket.id);
-      if (remaining === 0) {
-        await User.findByIdAndUpdate(user._id, { lastSeenAt: new Date() });
-        workspaces.forEach((ws) => {
-          io.to(`workspace:${ws._id}`).emit("presence:update", {
-            userId: String(user._id),
-            online: false,
-            name: user.name,
-          });
-        });
+      const currentUser = await User.findById(userId).select("name");
+      if (!(await isOnline(userId))) {
+        await User.findByIdAndUpdate(userId, { lastSeenAt: new Date() });
+        const workspaces = await Workspace.find({ "members.user": userId }).select("_id organizationId");
+        workspaces.forEach((workspace) => emitToWorkspace(io, workspace, "presence:update", {
+          userId: String(userId),
+          online: false,
+          name: currentUser?.name,
+        }));
       }
     });
-    addSocket(user._id, socket.id);
+    const user = await User.findById(userId);
+    if (!user) return socket.disconnect(true);
     enforceSessionExpiry();
-    socket.join(`user:${user._id}`);
+    socket.join(userRoom(userId));
+    if (socket.data.sessionId) socket.join(sessionRoom(socket.data.sessionId));
     user.lastSeenAt = new Date();
     await user.save();
     if (!socket.connected) return;
 
-    workspaces = await Workspace.find({ "members.user": user._id }).select("_id members");
+    const workspaces = await Workspace.find({ "members.user": userId }).select("_id organizationId members");
     if (!socket.connected) return;
-    workspaces.forEach((ws) => socket.join(`workspace:${ws._id}`));
+    workspaces.forEach((workspace) => {
+      socket.join(room("workspace", workspace._id, workspace.organizationId));
+      if (env.tenantEnforcement === "off") socket.join(legacyRoom("workspace", workspace._id));
+    });
 
     const workspaceIds = workspaces.map((ws) => ws._id);
     const channels = await Channel.find({
-      members: user._id,
+      members: userId,
       workspace: { $in: workspaceIds },
-    }).select("_id");
+    }).select("_id workspace");
     if (!socket.connected) return;
-    const currentUser = await User.findById(user._id).select("tokenVersion");
+    const currentUser = await User.findById(userId).select("tokenVersion");
     if (!socket.connected) return;
-    if (!currentUser || currentUser.tokenVersion !== user.tokenVersion) {
-      socket.emit("auth:session-expired");
+    if (!currentUser || currentUser.tokenVersion !== socket.data.tokenVersion) {
+      emitSocket(socket, "auth:session-expired");
       socket.disconnect(true);
       return;
     }
-    channels.forEach((ch) => socket.join(`channel:${ch._id}`));
+    channels.forEach((channel) => {
+      const workspace = workspaces.find((item) => String(item._id) === String(channel.workspace));
+      socket.join(room("channel", channel._id, workspace?.organizationId));
+      if (env.tenantEnforcement === "off") socket.join(legacyRoom("channel", channel._id));
+    });
 
     workspaces.forEach((ws) => {
-      io.to(`workspace:${ws._id}`).emit("presence:update", {
-        userId: String(user._id),
+        emitToWorkspace(io, ws, "presence:update", {
+          userId: String(userId),
         online: true,
         name: user.name,
       });
     });
 
     const visibleUserIds = new Set(workspaces.flatMap((workspace) => workspace.members.map(getMemberUserId)));
-    socket.emit("presence:snapshot", { onlineUserIds: onlineIds().filter((id) => visibleUserIds.has(String(id))) });
+    emitSocket(socket, "presence:snapshot", { onlineUserIds: (await onlineIds()).filter((id) => visibleUserIds.has(String(id))) });
 
     sessionValidationTimer = setInterval(async () => {
       try {
-        const currentUser = await User.findById(user._id).select("tokenVersion");
-        if (!currentUser || currentUser.tokenVersion !== user.tokenVersion) {
-          socket.emit("auth:session-expired");
+        const currentUser = await User.findById(userId).select("tokenVersion");
+        if (!currentUser || currentUser.tokenVersion !== socket.data.tokenVersion) {
+          emitSocket(socket, "auth:session-expired");
           socket.disconnect(true);
           return;
         }
         if (socket.data.sessionId) {
-          const session = await Session.findOne({ user: user._id, sidHash: crypto.createHash("sha256").update(socket.data.sessionId).digest("hex") }).select("_id");
+          const session = await Session.findOne({ user: userId, sidHash: crypto.createHash("sha256").update(socket.data.sessionId).digest("hex") }).select("_id");
           if (!session) {
-            socket.emit("auth:session-expired");
+            emitSocket(socket, "auth:session-expired");
             socket.disconnect(true);
           }
         }
@@ -169,9 +155,11 @@ function attachSockets(io) {
 
     socket.on("channel:join", async (channelId, ack) => {
       try {
-        const channel = await findAuthorizedChannel(channelId, user._id);
+        const channel = await findAuthorizedChannel(channelId, userId);
         if (!channel) throw new Error("Forbidden");
-        socket.join(`channel:${channel._id}`);
+        const workspace = await Workspace.findById(channel.workspace).select("organizationId");
+        socket.join(room("channel", channel._id, workspace?.organizationId));
+        if (env.tenantEnforcement === "off") socket.join(legacyRoom("channel", channel._id));
         if (typeof ack === "function") ack({ ok: true });
       } catch (err) {
         if (typeof ack === "function") ack({ ok: false, error: err.message });
@@ -184,14 +172,15 @@ function attachSockets(io) {
         return;
       }
       try {
-        const channel = await findAuthorizedChannel(channelId, user._id);
+        const channel = await findAuthorizedChannel(channelId, userId);
         if (!channel) {
           if (typeof ack === "function") ack({ ok: false, error: "Forbidden" });
           return;
         }
-        socket.to(`channel:${channel._id}`).emit("chat:typing", {
+        const workspace = await Workspace.findById(channel.workspace).select("organizationId");
+        emitToTyping(io, { ...channel.toObject(), workspace }, {
           channelId: String(channel._id),
-          userId: String(user._id),
+          userId: String(userId),
           name: user.name,
           typing: Boolean(typing),
         });
@@ -203,26 +192,6 @@ function attachSockets(io) {
     });
 
   });
-}
-
-function emitToWorkspace(io, workspaceId, event, payload) {
-  io.to(`workspace:${workspaceId}`).emit(event, payload);
-}
-
-function emitToProjectWorkspace(io, members, project, event, payload) {
-  members.forEach((member) => {
-    const userId = getMemberUserId(member);
-    if (!canAccessProject(project, member, userId)) return;
-    emitToUser(io, userId, event, payload);
-  });
-}
-
-function emitToChannel(io, channelId, event, payload) {
-  io.to(`channel:${channelId}`).emit(event, payload);
-}
-
-function emitToUser(io, userId, event, payload) {
-  io.to(`user:${userId}`).emit(event, payload);
 }
 
 module.exports = {

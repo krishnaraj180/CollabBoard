@@ -12,7 +12,7 @@ const { PRIORITIES } = Task;
 const { AppError, asyncHandler } = require("../utils/errors");
 const { requireMember, memberOf, isManager, getMemberUserId, canAccessProject } = require("../utils/access");
 const { organizationMemberOf, canAccessOrganizationProject } = require("../utils/organizationAccess");
-const { emitToProjectWorkspace } = require("../sockets");
+const { emitToProjectWorkspace } = require("../sockets/realtimeEmit");
 const { notifyUsers } = require("../utils/notify");
 const { logActivity } = require("../utils/activity");
 const { secureBody } = require("../utils/inputSecurity");
@@ -281,6 +281,7 @@ async function loadWorkspace(id, userId, platformRole = null) {
 async function loadProject(req) {
   const project = await loadTenantResource(Project, req.params.id, req.user, { populate: "workspace", route: req.originalUrl });
   const { workspace, membership, organization, organizationMembership } = await loadWorkspace(project.workspace?._id || project.workspace, req.user._id, req.user.platformRole);
+  project._tenantWorkspace = workspace;
   if (!canAccessProject(project, membership, req.user._id) &&
       !canAccessOrganizationProject(project, organizationMembership, req.user._id, req.user.platformRole)) {
     throw new AppError("You are not assigned to this project or its current approval step", 403);
@@ -765,6 +766,7 @@ const create = asyncHandler(async (req, res) => {
     owner: req.user._id,
     createdBy: req.user._id,
   });
+  project._tenantWorkspace = workspace;
   const io = req.app.get("io");
   const [withStats] = await statsForProjects([project]);
   emitToProjectWorkspace(io, workspace.members, project, "project:created", { project: withStats });

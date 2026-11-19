@@ -6,7 +6,7 @@ const Message = require("../models/Message");
 const { AppError, asyncHandler } = require("../utils/errors");
 const { requireMember, getMemberUserId } = require("../utils/access");
 const { organizationMemberOf } = require("../utils/organizationAccess");
-const { emitToChannel, emitToWorkspace } = require("../sockets");
+const { emitToChannel, emitToWorkspace } = require("../sockets/realtimeEmit");
 const { notifyUsers } = require("../utils/notify");
 const { resolveTenantFromParent } = require("../utils/organizationAccess");
 const { secureBody } = require("../utils/inputSecurity");
@@ -83,7 +83,7 @@ const createChannel = asyncHandler(async (req, res) => {
     createdBy: req.user._id,
   });
   await channel.populate("members", "name email avatarColor");
-  emitToWorkspace(req.app.get("io"), workspace._id, "channel:created", { channel });
+  emitToWorkspace(req.app.get("io"), workspace, "channel:created", { channel });
   res.status(201).json({ channel });
 });
 
@@ -132,7 +132,7 @@ const createMessage = asyncHandler(async (req, res) => {
   await message.populate("sender", "name email avatarColor");
 
   const payload = { message };
-  emitToChannel(req.app.get("io"), channel._id, "chat:message", payload);
+  emitToChannel(req.app.get("io"), channel, "chat:message", payload);
 
   const others = channel.members.filter((id) => String(id) !== String(req.user._id));
   await notifyUsers(req.app.get("io"), others, {
@@ -163,7 +163,7 @@ const updateMessage = asyncHandler(async (req, res) => {
   message.editedAt = new Date();
   await message.save();
   await message.populate("sender", "name email avatarColor");
-  emitToChannel(req.app.get("io"), channel._id, "chat:message-updated", { message });
+  emitToChannel(req.app.get("io"), channel, "chat:message-updated", { message });
   res.json({ message });
 });
 
@@ -177,7 +177,7 @@ const deleteMessage = asyncHandler(async (req, res) => {
   message.attachments = [];
   message.deletedAt = new Date();
   await message.save();
-  emitToChannel(req.app.get("io"), channel._id, "chat:message-deleted", { messageId: String(message._id), channelId: String(channel._id) });
+  emitToChannel(req.app.get("io"), channel, "chat:message-deleted", { messageId: String(message._id), channelId: String(channel._id) });
   res.json({ ok: true });
 });
 
@@ -186,7 +186,7 @@ const markMessageRead = asyncHandler(async (req, res) => {
   if (!message.readBy.some((id) => String(id) === String(req.user._id))) {
     message.readBy.push(req.user._id);
     await message.save();
-    emitToChannel(req.app.get("io"), channel._id, "chat:read", { channelId: String(channel._id), messageId: String(message._id), userId: String(req.user._id) });
+    emitToChannel(req.app.get("io"), channel, "chat:read", { channelId: String(channel._id), messageId: String(message._id), userId: String(req.user._id) });
   }
   res.json({ ok: true });
 });

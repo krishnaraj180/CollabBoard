@@ -12,7 +12,8 @@ const { AppError, asyncHandler } = require("../utils/errors");
 const { requireOrganizationPermission } = require("../utils/organizationAccess");
 const { getMemberUserId } = require("../utils/access");
 const { notifyUsers } = require("../utils/notify");
-const { isOnline, emitToWorkspace } = require("../sockets");
+const { isOnline } = require("../sockets");
+const { emitToWorkspace } = require("../sockets/realtimeEmit");
 const OrganizationMembership = require("../models/OrganizationMembership");
 const {
   createMembership,
@@ -480,7 +481,7 @@ const decideProposal = asyncHandler(async (req, res) => {
   for (const project of projects) {
     const workspace = workspaces.find((item) => String(item._id) === String(project.workspace));
     if (!workspace) continue;
-    emitToWorkspace(io, workspace._id, "project:created", { project });
+    emitToWorkspace(io, workspace, "project:created", { project });
   }
   const recipients = new Set([String(proposal.submittedBy)]);
   workspaces.forEach((workspace) => workspace.members.forEach((member) => recipients.add(getMemberUserId(member))));
@@ -841,7 +842,7 @@ const workload = asyncHandler(async (req, res) => {
   }
   const totalPending = [...stats.values()].reduce((sum, item) => sum + item.pending, 0);
   const capacity = organization.settings?.defaultTaskCapacity || 10;
-  const workload = organization.members.map((member) => {
+  const workload = (await Promise.all(organization.members.map(async (member) => {
     const user = users.find((item) => String(item._id) === getMemberUserId(member));
     if (!user) return null;
     const item = stats.get(String(user._id));
@@ -852,9 +853,9 @@ const workload = asyncHandler(async (req, res) => {
       ...item,
       workloadShare: totalPending ? Math.round((item.pending / totalPending) * 100) : 0,
       capacityPercent: Math.round((item.pending / capacity) * 100),
-      online: isOnline(user._id),
+      online: await isOnline(user._id),
     };
-  }).filter(Boolean);
+  }))).filter(Boolean);
   res.json({ workload, capacityPerMember: capacity, workspaceCount: workspaceIds.length });
 });
 
