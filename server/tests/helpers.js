@@ -1,5 +1,4 @@
 const http = require("http");
-const { MongoMemoryServer } = require("mongodb-memory-server");
 const mongoose = require("mongoose");
 const request = require("supertest");
 const { Server } = require("socket.io");
@@ -7,17 +6,25 @@ const { createApp } = require("../src/app");
 const { connectDb, disconnectDb } = require("../src/config/db");
 const { attachSockets } = require("../src/sockets");
 
-let mongo;
+const testResources = new Set();
+
+async function syncTestIndexes() {
+  await Promise.all(mongoose.modelNames().map((name) => mongoose.model(name).syncIndexes()));
+}
 
 async function startDb() {
-  mongo = await MongoMemoryServer.create();
-  await connectDb(mongo.getUri());
+  await connectDb(process.env.MONGODB_URI);
+  await syncTestIndexes();
 }
 
 async function stopDb() {
+  for (const resource of testResources) {
+    await new Promise((resolve) => resource.io.close(() => resolve()));
+    if (resource.server.listening) await new Promise((resolve) => resource.server.close(() => resolve()));
+  }
+  testResources.clear();
   await mongoose.connection.dropDatabase().catch(() => {});
   await disconnectDb();
-  if (mongo) await mongo.stop();
 }
 
 async function clearDb() {
@@ -31,6 +38,7 @@ function createTestApp() {
   const io = new Server(server, { cors: { origin: true, credentials: true } });
   app.set("io", io);
   attachSockets(io);
+  testResources.add({ server, io });
   return { app, server, io };
 }
 
@@ -77,4 +85,4 @@ async function advanceProjectToDevelopment(app, cookie, projectId, assignments) 
   if (designDone.status !== 200) throw new Error(`Design setup failed: ${designDone.status} ${designDone.body.message || ""}`);
 }
 
-module.exports = { startDb, stopDb, clearDb, createTestApp, register, advanceProjectToDevelopment };
+module.exports = { startDb, stopDb, clearDb, createTestApp, register, advanceProjectToDevelopment, syncTestIndexes };

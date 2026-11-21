@@ -2,7 +2,6 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const mongoose = require("mongoose");
-const { MongoMemoryServer } = require("mongodb-memory-server");
 const Organization = require("../src/models/Organization");
 const Workspace = require("../src/models/Workspace");
 const Project = require("../src/models/Project");
@@ -10,10 +9,9 @@ const Channel = require("../src/models/Channel");
 const Message = require("../src/models/Message");
 const Activity = require("../src/models/Activity");
 const Notification = require("../src/models/Notification");
-const { connectDb, disconnectDb } = require("../src/config/db");
+const { startDb, stopDb } = require("./helpers");
 const { migrate, rollback, assertProductionSafety } = require("../src/scripts/migrateTenantFoundation");
 
-let mongo;
 let tempDir;
 
 async function runMigration(options = {}) {
@@ -28,8 +26,7 @@ async function runMigration(options = {}) {
 }
 
 beforeAll(async () => {
-  mongo = await MongoMemoryServer.create();
-  await connectDb(mongo.getUri());
+  await startDb();
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "collabboard-migration-"));
 });
 
@@ -38,8 +35,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  await disconnectDb();
-  if (mongo) await mongo.stop();
+  await stopDb();
   if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
