@@ -13,7 +13,7 @@ const { requireOrganizationPermission } = require("../utils/organizationAccess")
 const { getMemberUserId } = require("../utils/access");
 const { notifyUsers } = require("../utils/notify");
 const { isOnline } = require("../sockets");
-const { emitToWorkspace } = require("../sockets/realtimeEmit");
+const { emitToWorkspace } = require("../services/realtimeEmit");
 const OrganizationMembership = require("../models/OrganizationMembership");
 const {
   createMembership,

@@ -1,5 +1,5 @@
 const Activity = require("../models/Activity");
-const { emitToWorkspace, emitToProjectWorkspace } = require("../sockets/realtimeEmit");
+const { emitToWorkspace, emitToProjectWorkspace } = require("../services/realtimeEmit");
 const { resolveTenantFromParent } = require("./organizationAccess");
 
 /** Record an activity and scope project events to the assigned project manager. */

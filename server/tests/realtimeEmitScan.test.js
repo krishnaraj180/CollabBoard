@@ -12,7 +12,7 @@ function javascriptFiles(directory) {
 test("all socket emits go through realtimeEmit", () => {
   const sourceRoot = path.join(__dirname, "..", "src");
   const offenders = javascriptFiles(sourceRoot)
-    .filter((file) => !file.endsWith(path.join("sockets", "realtimeEmit.js")))
+    .filter((file) => !file.endsWith(path.join("services", "realtimeEmit.js")))
     .flatMap((file) => {
       const source = fs.readFileSync(file, "utf8");
       return [

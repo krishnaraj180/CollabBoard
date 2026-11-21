@@ -7,8 +7,8 @@ const Channel = require("../models/Channel");
 const { env } = require("../config/env");
 const { COOKIE } = require("../utils/tokens");
 const { memberOf, getMemberUserId } = require("../utils/access");
-const { configure, userRoom, sessionRoom, onlineIds, isOnline } = require("./realtimeAccess");
-const { emitToWorkspace, emitToProjectWorkspace, emitToChannel, emitToUser, emitToTyping, emitSocket, room, legacyRoom } = require("./realtimeEmit");
+const { configure, userRoom, sessionRoom, onlineIds, isOnline } = require("../services/realtimePresence");
+const { emitToWorkspace, emitToProjectWorkspace, emitToChannel, emitToUser, emitToTyping, emitSocket, room, legacyRoom } = require("../services/realtimeEmit");
 
 function parseCookie(header) {
   const out = {};
