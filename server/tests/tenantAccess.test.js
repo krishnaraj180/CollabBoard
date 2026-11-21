@@ -51,6 +51,6 @@ describe("central tenant access policy", () => {
   test("tenant errors have stable codes and statuses", () => {
     expect(tenantNotFound()).toEqual(expect.objectContaining({ status: 404, code: "RESOURCE_NOT_FOUND" }));
     expect(organizationSuspended()).toEqual(expect.objectContaining({ status: 403, code: "ORG_SUSPENDED" }));
-    expect(enforcementMode()).toBe("off");
+    expect(enforcementMode()).toBe((process.env.TENANT_ENFORCEMENT || "off").toLowerCase());
   });
 });

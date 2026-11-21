@@ -30,10 +30,10 @@ test("resource emitters build scoped and legacy rooms from loaded resources", ()
   emitToChannel(io, channel, "channel:event", { ok: true });
   expect(room("workspace", "w1", "o1")).toBe("org:o1:workspace:w1");
   expect(legacyRoom("workspace", "w1")).toBe("workspace:w1");
-  expect(io.calls.filter((call) => call.type === "emit").map((call) => call.target)).toEqual([
-    ["org:o1:workspace:w1", "workspace:w1"],
-    ["org:o1:channel:c1", "channel:c1"],
-  ]);
+  const expected = (process.env.TENANT_ENFORCEMENT || "off") === "off"
+    ? [["org:o1:workspace:w1", "workspace:w1"], ["org:o1:channel:c1", "channel:c1"]]
+    : [["org:o1:workspace:w1"], ["org:o1:channel:c1"]];
+  expect(io.calls.filter((call) => call.type === "emit").map((call) => call.target)).toEqual(expected);
 });
 
 test("personal events use only the user room", () => {
