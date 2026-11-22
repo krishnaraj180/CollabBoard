@@ -1,5 +1,5 @@
 const OrganizationMembership = require("../models/OrganizationMembership");
-const { resolveRoleForMembership } = require("../services/roleService");
+const { resolveRoleForMembership, legacyRoleForRole } = require("../services/roleService");
 
 async function findMembership(organizationId, userId) {
   return OrganizationMembership.findOne({ organizationId, userId });
@@ -18,6 +18,12 @@ async function syncMembershipRole(membership, nextRole) {
   const systemRole = await resolveRoleForMembership(membership.organizationId, nextRole);
   membership.role = nextRole;
   membership.roleId = systemRole?._id || null;
+  return membership;
+}
+
+async function syncMembershipToRole(membership, role) {
+  membership.role = legacyRoleForRole(role);
+  membership.roleId = role._id;
   return membership;
 }
 
@@ -50,4 +56,5 @@ module.exports = {
   countActiveOwners,
   assertOwnerInvariant,
   syncMembershipRole,
+  syncMembershipToRole,
 };

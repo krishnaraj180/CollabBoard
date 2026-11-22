@@ -39,4 +39,21 @@ async function resolveRoleForMembership(organizationId, legacyRole) {
   return Role.findOne({ organizationId, key: definition.key }).select("_id key name permissions").lean();
 }
 
-module.exports = { SYSTEM_ROLE_DEFINITIONS, seedSystemRoles, resolveRoleForMembership };
+async function permissionsForMembership(membership) {
+  if (!membership) return [];
+  if (membership.roleId) {
+    const role = await Role.findOne({ _id: membership.roleId, organizationId: membership.organizationId })
+      .select("permissions")
+      .lean();
+    if (role) return role.permissions;
+  }
+  return legacyToSystemRole(membership.role).permissions;
+}
+
+function legacyRoleForRole(role) {
+  if (!role?.isSystem) return "member";
+  const definition = SYSTEM_ROLE_DEFINITIONS.find((item) => item.key === role.key);
+  return definition?.legacyRoles[0] || "member";
+}
+
+module.exports = { SYSTEM_ROLE_DEFINITIONS, seedSystemRoles, resolveRoleForMembership, permissionsForMembership, legacyRoleForRole };
