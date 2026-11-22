@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "source": "current hardcoded authorization checks",
+  "organizationRoles": ["organization_owner", "organization_admin", "business_management", "project_manager", "team_lead", "developer", "qa_tester", "viewer"],
+  "organizationEndpoints": [
+    { "endpoint": "GET /api/organizations/:id", "permission": "organization:read" },
+    { "endpoint": "PATCH /api/organizations/:id", "permission": "organization:update" },
+    { "endpoint": "POST /api/organizations/:id/proposals", "permission": "organization:proposals" },
+    { "endpoint": "POST /api/organizations/:id/proposals/:proposalId/decision", "permission": "organization:proposals" },
+    { "endpoint": "POST /api/organizations/:id/invitations", "permission": "organization:invite" },
+    { "endpoint": "GET /api/organizations/:id/invitations", "permission": "organization:invite" },
+    { "endpoint": "DELETE /api/organizations/:id/invitations/:invitationId", "permission": "organization:invite" },
+    { "endpoint": "PATCH /api/organizations/:id/members/:userId", "permission": "organization:members" },
+    { "endpoint": "DELETE /api/organizations/:id/members/:userId", "permission": "organization:members" },
+    { "endpoint": "POST /api/organizations/:id/departments", "permission": "organization:departments" },
+    { "endpoint": "PATCH /api/organizations/:id/departments/:departmentId", "permission": "organization:departments" },
+    { "endpoint": "DELETE /api/organizations/:id/departments/:departmentId", "permission": "organization:departments" },
+    { "endpoint": "PUT /api/organizations/:id/workspaces/:workspaceId", "permission": "organization:workspaces" },
+    { "endpoint": "DELETE /api/organizations/:id/workspaces/:workspaceId", "permission": "organization:workspaces" },
+    { "endpoint": "GET /api/organizations/:id/workload", "permission": "organization:reports" }
+  ],
+  "workspaceEndpoints": [
+    { "endpoint": "POST /api/workspaces/:id/invites", "roles": ["owner", "admin", "ceo", "managing_director", "team_lead", "development_team_lead", "qa_team_lead", "design_team_lead", "devops_team_lead", "marketing_team_lead"] },
+    { "endpoint": "PATCH /api/workspaces/:id", "roles": ["owner", "admin", "ceo"] },
+    { "endpoint": "PATCH /api/workspaces/:id/members/:userId", "roles": ["owner", "ceo"] },
+    { "endpoint": "PATCH /api/workspaces/:id/members/:userId/organization", "roles": ["owner", "admin", "ceo", "managing_director"] },
+    { "endpoint": "PATCH /api/workspaces/:id/organization", "roles": ["owner", "admin", "ceo", "managing_director"] },
+    { "endpoint": "DELETE /api/workspaces/:id/members/:userId", "roles": ["owner", "admin", "ceo", "managing_director", "team_lead", "development_team_lead", "qa_team_lead", "design_team_lead", "devops_team_lead", "marketing_team_lead"] }
+  ],
+  "unmappedChecks": [
+    "project workflow stage and department assignment checks",
+    "workspace team-lead target-role restrictions",
+    "creator-or-manager task/comment checks",
+    "channel viewer/write checks",
+    "organization owner invariant checks"
+  ]
+}
