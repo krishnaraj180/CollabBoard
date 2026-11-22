@@ -3,7 +3,11 @@ const Organization = require("../models/Organization");
 const OrganizationMembership = require("../models/OrganizationMembership");
 const Workspace = require("../models/Workspace");
 const Channel = require("../models/Channel");
-const { memberOf } = require("../utils/access");
+const Role = require("../models/Role");
+const { isKnownPermission } = require("../config/permissionCatalog");
+const { legacyToSystemRole } = require("./roleMapping");
+const { memberOf, hasPermission: hasLegacyPermission } = require("../utils/access");
+const { AppError } = require("../utils/errors");
 const { tenantNotFound, organizationSuspended } = require("../utils/tenantErrors");
 const { env } = require("../config/env");
 
@@ -31,7 +35,7 @@ function legacyWorkspaceMembership(workspace, userId) {
 
 async function membershipRecord(userId, organizationId) {
   if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(organizationId)) return null;
-  const memberships = await OrganizationMembership.find({ userId, organizationId }).select("role status department title joinedAt").lean();
+  const memberships = await OrganizationMembership.find({ userId, organizationId }).select("role roleId status department title joinedAt").lean();
   if (!memberships.length) return null;
   memberships.sort((a, b) => {
     const statusDifference = (STATUS_PRIORITY[b.status] || 0) - (STATUS_PRIORITY[a.status] || 0);
@@ -182,4 +186,41 @@ async function listScope(userId) {
   return { organizationIds, legacyWorkspaceIds: legacyWorkspaces.map((workspace) => workspace._id) };
 }
 
-module.exports = { enforcementMode, getMembership, activeOrganizationsFor, legacyWorkspaceMembership, legacyWorkspacesFor, loadTenantResource, listScope };
+function resourceOrganizationId(resource) {
+  if (!resource) return null;
+  if (resource.constructor?.modelName === "Organization") return resource._id;
+  if (resource.organizationId) return resource.organizationId;
+  if (resource.workspace?.organizationId) return resource.workspace.organizationId;
+  if (resource.project?.workspace?.organizationId) return resource.project.workspace.organizationId;
+  if (resource.channel?.workspace?.organizationId) return resource.channel.workspace.organizationId;
+  return null;
+}
+
+async function requirePermission(permission, resource, user) {
+  if (!isKnownPermission(permission)) throw new TypeError(`Unknown permission string: ${permission}`);
+  if (!resource || !user) throw tenantNotFound();
+  if (user.platformRole === "super_admin") return null;
+  const organizationId = resourceOrganizationId(resource);
+  const directWorkspaceMembership = resource.constructor?.modelName === "Workspace" ? memberOf(resource, user._id) : null;
+  if (resource.constructor?.modelName === "Workspace" && !directWorkspaceMembership) throw new AppError("Insufficient workspace permissions", 403);
+  if (!organizationId) {
+    const legacyMembership = directWorkspaceMembership || legacyWorkspaceMembership(resource.workspace, user._id);
+    if (!legacyMembership || !hasLegacyPermission(legacyMembership.role, permission)) throw new AppError(`Insufficient permissions: cannot perform "${permission}"`, 403);
+    return legacyMembership;
+  }
+  const membership = await getMembership(user._id, organizationId);
+  if (!membership) {
+    if (directWorkspaceMembership && hasLegacyPermission(directWorkspaceMembership.role, permission)) return directWorkspaceMembership;
+    throw tenantNotFound();
+  }
+  let permissions;
+  if (membership.roleId) {
+    const role = await Role.findOne({ _id: membership.roleId, organizationId }).select("permissions").lean();
+    permissions = role?.permissions;
+  }
+  if (!permissions) permissions = legacyToSystemRole(membership.role).permissions;
+  if (permissions.includes(permission) || (directWorkspaceMembership && hasLegacyPermission(directWorkspaceMembership.role, permission))) return membership;
+  throw new AppError(`Insufficient organization permissions: cannot perform "${permission}"`, 403);
+}
+
+module.exports = { enforcementMode, getMembership, activeOrganizationsFor, legacyWorkspaceMembership, legacyWorkspacesFor, loadTenantResource, listScope, requirePermission, resourceOrganizationId };

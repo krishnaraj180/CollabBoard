@@ -1,4 +1,5 @@
 const { AppError } = require("./errors");
+const { isKnownPermission } = require("../config/permissionCatalog");
 
 const ROLES = {
   OWNER: "owner",
@@ -91,10 +92,12 @@ const WORKFLOW_REVIEW_ROLES = {
 const PERMISSIONS = {
   // Workspace management
   "workspace:update": [ROLES.OWNER, ROLES.ADMIN, ROLES.CEO],
+  "workspace:organization_update": [ROLES.OWNER, ROLES.ADMIN, ROLES.CEO, ROLES.MANAGING_DIRECTOR],
   "workspace:delete": [ROLES.OWNER],
-  "member:invite": [ROLES.OWNER, ROLES.ADMIN, ROLES.CEO, ROLES.MANAGING_DIRECTOR],
-  "member:remove": [ROLES.OWNER, ROLES.ADMIN, ROLES.CEO, ROLES.MANAGING_DIRECTOR],
+  "member:invite": [ROLES.OWNER, ROLES.ADMIN, ROLES.CEO, ROLES.MANAGING_DIRECTOR, ROLES.TEAM_LEAD, ROLES.DEVELOPMENT_TEAM_LEAD, ROLES.QA_TEAM_LEAD, ROLES.DESIGN_TEAM_LEAD, ROLES.DEVOPS_TEAM_LEAD, ROLES.MARKETING_TEAM_LEAD],
+  "member:remove": [ROLES.OWNER, ROLES.ADMIN, ROLES.CEO, ROLES.MANAGING_DIRECTOR, ROLES.TEAM_LEAD, ROLES.DEVELOPMENT_TEAM_LEAD, ROLES.QA_TEAM_LEAD, ROLES.DESIGN_TEAM_LEAD, ROLES.DEVOPS_TEAM_LEAD, ROLES.MARKETING_TEAM_LEAD],
   "member:role": [ROLES.OWNER, ROLES.CEO],
+  "org.manage_roles": [ROLES.OWNER, ROLES.ADMIN],
 
   // Project management
   "project:create": [ROLES.OWNER, ROLES.ADMIN, ROLES.CEO, ROLES.MANAGING_DIRECTOR],
@@ -139,6 +142,7 @@ function requireRole(workspace, userId, roles) {
 }
 
 function hasPermission(role, permission) {
+  if (!isKnownPermission(permission)) throw new TypeError(`Unknown permission string: ${permission}`);
   const allowed = PERMISSIONS[permission];
   return allowed ? allowed.includes(role) : false;
 }

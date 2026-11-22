@@ -6,11 +6,12 @@ const Message = require("../models/Message");
 const { AppError, asyncHandler } = require("../utils/errors");
 const { requireMember, getMemberUserId } = require("../utils/access");
 const { organizationMemberOf } = require("../utils/organizationAccess");
-const { emitToChannel, emitToWorkspace } = require("../sockets/realtimeEmit");
+const { emitToChannel, emitToWorkspace } = require("../services/realtimeEmit");
 const { notifyUsers } = require("../utils/notify");
 const { resolveTenantFromParent } = require("../utils/organizationAccess");
 const { secureBody } = require("../utils/inputSecurity");
 const { loadTenantResource } = require("../services/tenantAccess");
+const { grantUser, allRoomVariants } = require("../services/realtimeAccess");
 
 const channelSchema = z.object({
   params: z.object({ workspaceId: z.string() }),
@@ -82,6 +83,9 @@ const createChannel = asyncHandler(async (req, res) => {
     members: [...memberIds],
     createdBy: req.user._id,
   });
+  for (const memberId of memberIds) {
+    await grantUser(req.app.get("io"), workspace.organizationId, memberId, allRoomVariants("channel", channel, workspace.organizationId));
+  }
   await channel.populate("members", "name email avatarColor");
   emitToWorkspace(req.app.get("io"), workspace, "channel:created", { channel });
   res.status(201).json({ channel });

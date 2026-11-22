@@ -1,4 +1,4 @@
-const { emitToWorkspace, emitToChannel, emitToUser, room, legacyRoom } = require("../src/sockets/realtimeEmit");
+const { emitToWorkspace, emitToChannel, emitToProjectWorkspace, emitToTyping, emitToUser, room, legacyRoom } = require("../src/services/realtimeEmit");
 
 function fakeIo() {
   const calls = [];
@@ -40,4 +40,16 @@ test("personal events use only the user room", () => {
   const io = fakeIo();
   emitToUser(io, "u1", "notification:new", { organizationId: "o1" });
   expect(io.calls).toEqual([{ type: "emit", target: "user:u1", event: "notification:new", payload: { organizationId: "o1" } }]);
+});
+
+test("project and typing events honor scoped/legacy mode", () => {
+  const io = fakeIo();
+  const workspace = { _id: "w1", organizationId: "o1" };
+  const project = { _id: "p1", _tenantWorkspace: workspace };
+  emitToProjectWorkspace(io, [{ user: "u1", role: "owner" }], project, "project:event", { ok: true });
+  emitToTyping(io, { _id: "c1", organizationId: "o1" }, { channelId: "c1" });
+  const expected = (process.env.TENANT_ENFORCEMENT || "off") === "off"
+    ? ["org:o1:project:p1", "workspace:w1", ["org:o1:channel:c1", "channel:c1"]]
+    : ["org:o1:project:p1", ["org:o1:channel:c1"]];
+  expect(io.calls.filter((call) => call.type === "emit").map((call) => call.target)).toEqual(expected);
 });

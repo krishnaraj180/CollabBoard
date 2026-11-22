@@ -1,5 +1,5 @@
 const Notification = require("../models/Notification");
-const { emitToUser } = require("../sockets/realtimeEmit");
+const { emitToUser } = require("../services/realtimeEmit");
 const { resolveTenantFromParent } = require("./organizationAccess");
 
 async function notifyUsers(io, userIds, payload) {

@@ -1,5 +1,5 @@
 const { enforcementMode } = require("../services/tenantAccess");
-const { userRoom } = require("./realtimeAccess");
+const { userRoom } = require("./realtimePresence");
 const { canAccessProject } = require("../utils/access");
 
 function resourceId(resource) {

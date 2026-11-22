@@ -2,13 +2,18 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const Session = require("../models/Session");
 const crypto = require("crypto");
+const mongoose = require("mongoose");
 const Workspace = require("../models/Workspace");
 const Channel = require("../models/Channel");
+const Project = require("../models/Project");
 const { env } = require("../config/env");
 const { COOKIE } = require("../utils/tokens");
 const { memberOf, getMemberUserId } = require("../utils/access");
-const { configure, userRoom, sessionRoom, onlineIds, isOnline } = require("./realtimeAccess");
-const { emitToWorkspace, emitToProjectWorkspace, emitToChannel, emitToUser, emitToTyping, emitSocket, room, legacyRoom } = require("./realtimeEmit");
+const { canAccessProject } = require("../utils/access");
+const { getMembership, loadTenantResource, enforcementMode } = require("../services/tenantAccess");
+const { allRoomVariants } = require("../services/realtimeAccess");
+const { configure, userRoom, sessionRoom, onlineIds, isOnline } = require("../services/realtimePresence");
+const { emitToWorkspace, emitToProjectWorkspace, emitToChannel, emitToUser, emitToTyping, emitSocket, room, legacyRoom } = require("../services/realtimeEmit");
 
 function parseCookie(header) {
   const out = {};
@@ -20,13 +25,87 @@ function parseCookie(header) {
   return out;
 }
 
-async function findAuthorizedChannel(channelId, userId) {
-  const channel = await Channel.findById(channelId);
-  if (!channel) return null;
-  const workspace = await Workspace.findById(channel.workspace).select("members");
-  if (!workspace || !memberOf(workspace, userId)) return null;
-  if (!channel.members.some((id) => String(id) === String(userId))) return null;
-  return channel;
+const AUTO_JOIN_ROOM_CAP = 100;
+const JOIN_DENIED = Object.freeze({ ok: false, error: "Forbidden" });
+
+function joinUser(userId, platformRole = null) {
+  return { _id: userId, platformRole };
+}
+
+async function workspaceCanJoin(workspace, userId, platformRole) {
+  const direct = memberOf(workspace, userId);
+  if (direct) return direct;
+  if (enforcementMode() !== "off" && workspace.organizationId) {
+    const membership = await getMembership(userId, workspace.organizationId);
+    return membership || platformRole === "super_admin";
+  }
+  return null;
+}
+
+async function canJoinResource(resource, scope, user) {
+  if (scope === "workspace") return Boolean(await workspaceCanJoin(resource, user._id, user.platformRole));
+  if (scope === "channel") {
+    const workspace = resource.workspace?._id ? resource.workspace : await Workspace.findById(resource.workspace);
+    const workspaceMembership = await workspaceCanJoin(workspace, user._id, user.platformRole);
+    return Boolean(workspaceMembership && resource.members.some((id) => String(id) === String(user._id)));
+  }
+  if (scope === "project") {
+    const workspace = resource.workspace?._id ? resource.workspace : await Workspace.findById(resource.workspace);
+    const workspaceMembership = await workspaceCanJoin(workspace, user._id, user.platformRole);
+    if (!workspaceMembership) return false;
+    if (canAccessProject(resource, workspaceMembership, user._id)) return true;
+    const organizationMembership = resource.workspace?.organizationId
+      ? await getMembership(user._id, resource.workspace.organizationId)
+      : null;
+    return ["organization_admin", "organization_owner"].includes(organizationMembership?.role);
+  }
+  return false;
+}
+
+async function legacyCanJoinResource(resource, scope, user) {
+  if (scope === "workspace") return Boolean(memberOf(resource, user._id));
+  const workspace = resource.workspace?._id ? resource.workspace : await Workspace.findById(resource.workspace);
+  const workspaceMembership = memberOf(workspace, user._id);
+  if (!workspaceMembership) return false;
+  if (scope === "channel") return resource.members.some((id) => String(id) === String(user._id));
+  return canAccessProject(resource, workspaceMembership, user._id);
+}
+
+async function policyJoinAllowed(resource, scope, user, route) {
+  const allowed = await canJoinResource(resource, scope, user);
+  if (allowed || enforcementMode() !== "log") return allowed;
+  console.warn(JSON.stringify({ route, userId: String(user._id), resourceId: String(resource._id), oldOutcome: "allowed", newOutcome: "denied", timestamp: new Date().toISOString() }));
+  return legacyCanJoinResource(resource, scope, user);
+}
+
+async function joinChecked(socket, Model, id, user, scope, { enforceCap = false, capState = null } = {}) {
+  if (!mongoose.isValidObjectId(id)) throw new Error("Forbidden");
+  const populate = scope === "channel" ? "workspace" : scope === "project" ? "workspace" : undefined;
+  const resource = await loadTenantResource(Model, id, user, { populate, route: `socket.${scope}.join` });
+  if (!await policyJoinAllowed(resource, scope, user, `socket.${scope}.join`)) throw new Error("Forbidden");
+  const organizationId = resource.organizationId || resource.workspace?.organizationId || null;
+  const rooms = allRoomVariants(scope, resource, organizationId);
+  if (enforceCap && capState.count + rooms.length > AUTO_JOIN_ROOM_CAP) {
+    console.warn(JSON.stringify({ event: "realtime.auto_join_cap", userId: String(user._id), cap: AUTO_JOIN_ROOM_CAP, resourceType: scope, resourceId: String(resource._id) }));
+    return { resource, joined: false };
+  }
+  rooms.forEach((name) => socket.join(name));
+  capState.count += rooms.length;
+  const refreshed = await loadTenantResource(Model, id, user, { populate, route: `socket.${scope}.recheck` });
+  if (!await policyJoinAllowed(refreshed, scope, user, `socket.${scope}.recheck`)) {
+    rooms.forEach((name) => socket.leave(name));
+    throw new Error("Forbidden");
+  }
+  return { resource, joined: true };
+}
+
+async function joinDenied(ack, operation) {
+  try {
+    await operation();
+    if (typeof ack === "function") ack({ ok: true });
+  } catch {
+    if (typeof ack === "function") ack({ ...JOIN_DENIED });
+  }
 }
 
 function attachSockets(io) {
@@ -42,15 +121,18 @@ function attachSockets(io) {
       if ((payload.ver || 0) !== user.tokenVersion) {
         return next(new Error("Session has ended"));
       }
+      let sessionRecordId = null;
       if (payload.sid) {
         const session = await Session.findOne({ user: user._id, sidHash: crypto.createHash("sha256").update(payload.sid).digest("hex") });
         if (!session) return next(new Error("Session has ended"));
+        sessionRecordId = String(session._id);
         session.lastActivityAt = new Date();
         await session.save();
       }
       socket.data.userId = String(user._id);
       socket.data.tokenVersion = user.tokenVersion;
       socket.data.sessionId = payload.sid || null;
+      socket.data.sessionRecordId = sessionRecordId;
       socket.data.authExpiresAt = payload.exp ? payload.exp * 1000 : null;
       next();
     } catch {
@@ -92,22 +174,28 @@ function attachSockets(io) {
     enforceSessionExpiry();
     socket.join(userRoom(userId));
     if (socket.data.sessionId) socket.join(sessionRoom(socket.data.sessionId));
+    if (socket.data.sessionRecordId) socket.join(sessionRoom(socket.data.sessionRecordId));
     user.lastSeenAt = new Date();
     await user.save();
     if (!socket.connected) return;
 
     const workspaces = await Workspace.find({ "members.user": userId }).select("_id organizationId members");
     if (!socket.connected) return;
-    workspaces.forEach((workspace) => {
-      socket.join(room("workspace", workspace._id, workspace.organizationId));
-      if (env.tenantEnforcement === "off") socket.join(legacyRoom("workspace", workspace._id));
-    });
+    const capState = { count: 0 };
+    for (const workspace of workspaces) {
+      try {
+        await joinChecked(socket, Workspace, workspace._id, joinUser(userId, user.platformRole), "workspace", { enforceCap: true, capState });
+      } catch (error) {
+        console.warn(JSON.stringify({ event: "realtime.auto_join_denied", userId: String(userId), resourceType: "workspace", resourceId: String(workspace._id), error: error.message }));
+      }
+    }
 
     const workspaceIds = workspaces.map((ws) => ws._id);
     const channels = await Channel.find({
       members: userId,
       workspace: { $in: workspaceIds },
     }).select("_id workspace");
+    const projects = await Project.find({ workspace: { $in: workspaceIds } }).select("_id workspace");
     if (!socket.connected) return;
     const currentUser = await User.findById(userId).select("tokenVersion");
     if (!socket.connected) return;
@@ -116,11 +204,20 @@ function attachSockets(io) {
       socket.disconnect(true);
       return;
     }
-    channels.forEach((channel) => {
-      const workspace = workspaces.find((item) => String(item._id) === String(channel.workspace));
-      socket.join(room("channel", channel._id, workspace?.organizationId));
-      if (env.tenantEnforcement === "off") socket.join(legacyRoom("channel", channel._id));
-    });
+    for (const channel of channels) {
+      try {
+        await joinChecked(socket, Channel, channel._id, joinUser(userId, user.platformRole), "channel", { enforceCap: true, capState });
+      } catch (error) {
+        console.warn(JSON.stringify({ event: "realtime.auto_join_denied", userId: String(userId), resourceType: "channel", resourceId: String(channel._id), error: error.message }));
+      }
+    }
+    for (const project of projects) {
+      try {
+        await joinChecked(socket, Project, project._id, joinUser(userId, user.platformRole), "project", { enforceCap: true, capState });
+      } catch (error) {
+        console.warn(JSON.stringify({ event: "realtime.auto_join_denied", userId: String(userId), resourceType: "project", resourceId: String(project._id), error: error.message }));
+      }
+    }
 
     workspaces.forEach((ws) => {
         emitToWorkspace(io, ws, "presence:update", {
@@ -153,18 +250,9 @@ function attachSockets(io) {
       }
     }, 30000);
 
-    socket.on("channel:join", async (channelId, ack) => {
-      try {
-        const channel = await findAuthorizedChannel(channelId, userId);
-        if (!channel) throw new Error("Forbidden");
-        const workspace = await Workspace.findById(channel.workspace).select("organizationId");
-        socket.join(room("channel", channel._id, workspace?.organizationId));
-        if (env.tenantEnforcement === "off") socket.join(legacyRoom("channel", channel._id));
-        if (typeof ack === "function") ack({ ok: true });
-      } catch (err) {
-        if (typeof ack === "function") ack({ ok: false, error: err.message });
-      }
-    });
+    socket.on("channel:join", (channelId, ack) => joinDenied(ack, () => joinChecked(socket, Channel, channelId, user, "channel")));
+    socket.on("workspace:join", (workspaceId, ack) => joinDenied(ack, () => joinChecked(socket, Workspace, workspaceId, user, "workspace")));
+    socket.on("project:join", (projectId, ack) => joinDenied(ack, () => joinChecked(socket, Project, projectId, user, "project")));
 
     socket.on("chat:typing", async ({ channelId, typing } = {}, ack) => {
       if (!channelId) {
@@ -172,12 +260,9 @@ function attachSockets(io) {
         return;
       }
       try {
-        const channel = await findAuthorizedChannel(channelId, userId);
-        if (!channel) {
-          if (typeof ack === "function") ack({ ok: false, error: "Forbidden" });
-          return;
-        }
-        const workspace = await Workspace.findById(channel.workspace).select("organizationId");
+        const channel = await loadTenantResource(Channel, channelId, user, { populate: "workspace", route: "socket.chat.typing" });
+        if (!await policyJoinAllowed(channel, "channel", user, "socket.chat.typing")) throw new Error("Forbidden");
+        const workspace = channel.workspace;
         emitToTyping(io, { ...channel.toObject(), workspace }, {
           channelId: String(channel._id),
           userId: String(userId),
@@ -187,7 +272,7 @@ function attachSockets(io) {
         if (typeof ack === "function") ack({ ok: true });
       } catch (err) {
         console.error("Socket typing authorization failed:", err.message);
-        if (typeof ack === "function") ack({ ok: false, error: "Unable to authorize channel" });
+        if (typeof ack === "function") ack({ ok: false, error: "Forbidden" });
       }
     });
 

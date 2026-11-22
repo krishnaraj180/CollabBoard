@@ -4,7 +4,7 @@ const Organization = require("../models/Organization");
 const Channel = require("../models/Channel");
 const User = require("../models/User");
 const { AppError, asyncHandler } = require("../utils/errors");
-const { requireMember, requireRole, getMemberUserId } = require("../utils/access");
+const { requireMember, getMemberUserId } = require("../utils/access");
 const Task = require("../models/Task");
 const Project = require("../models/Project");
 const { notifyUsers } = require("../utils/notify");
@@ -13,7 +13,8 @@ const { DEFAULT_DEPARTMENTS } = require("../utils/organization");
 const { ASSIGNABLE_WORKSPACE_ROLES } = require("../utils/access");
 const { resolveTenantFromParent } = require("../utils/organizationAccess");
 const { secureBody } = require("../utils/inputSecurity");
-const { listScope, loadTenantResource } = require("../services/tenantAccess");
+const { listScope, loadTenantResource, requirePermission } = require("../services/tenantAccess");
+const { grantUser, revokeUser, roomsForWorkspace } = require("../services/realtimeAccess");
 
 const TEAM_LEAD_INVITE_ROLES = {
   team_lead: ["frontend_developer", "backend_developer", "react_developer", "ui_developer", "nodejs_developer", "java_developer", "python_developer"],
@@ -147,6 +148,7 @@ const create = asyncHandler(async (req, res) => {
     organization: { version: 3, departments: DEFAULT_DEPARTMENTS },
   });
   await ensureGeneralChannel(workspace, req.user._id);
+  await grantUser(req.app.get("io"), workspace.organizationId, req.user._id, await roomsForWorkspace(workspace));
   const populated = await workspace.populate("members.user", "name email avatarColor lastSeenAt");
   res.status(201).json({ workspace: populated });
 });
@@ -188,9 +190,8 @@ const getOne = asyncHandler(async (req, res) => {
 
 const invite = asyncHandler(async (req, res) => {
   const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
-  const actor = requireRole(workspace, req.user._id, [
-    "owner", "admin", "ceo", "managing_director", ...Object.keys(TEAM_LEAD_INVITE_ROLES),
-  ]);
+  await requirePermission("member:invite", workspace, req.user);
+  const actor = requireMember(workspace, req.user._id);
   const permittedTeamRoles = TEAM_LEAD_INVITE_ROLES[actor.role];
   if (permittedTeamRoles && !permittedTeamRoles.includes(req.body.role)) {
     throw new AppError("Team leads can only invite members to their own team", 403);
@@ -234,6 +235,7 @@ const invite = asyncHandler(async (req, res) => {
     general.members.push(invitee._id);
     await general.save();
   }
+  await grantUser(req.app.get("io"), workspace.organizationId, invitee._id, await roomsForWorkspace(workspace));
 
   await notifyUsers(req.app.get("io"), [invitee._id], {
     resource: workspace,
@@ -257,7 +259,7 @@ const invite = asyncHandler(async (req, res) => {
 
 const update = asyncHandler(async (req, res) => {
   const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
-  requireRole(workspace, req.user._id, ["owner", "admin", "ceo"]);
+  await requirePermission("workspace:update", workspace, req.user);
   if (req.body.name !== undefined) workspace.name = req.body.name;
   if (req.body.description !== undefined) workspace.description = req.body.description;
   await workspace.save();
@@ -267,7 +269,8 @@ const update = asyncHandler(async (req, res) => {
 
 const updateRole = asyncHandler(async (req, res) => {
   const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
-  const actor = requireRole(workspace, req.user._id, ["owner", "ceo"]);
+  await requirePermission("member:role", workspace, req.user);
+  const actor = requireMember(workspace, req.user._id);
   const member = workspace.members.find((m) => getMemberUserId(m) === req.params.userId);
   if (!member) throw new AppError("Member not found", 404);
   if (member.role === "owner") throw new AppError("Cannot change the owner role", 400);
@@ -275,6 +278,7 @@ const updateRole = asyncHandler(async (req, res) => {
     throw new AppError("The CEO cannot remove their own company role", 403);
   }
   await validateLeadershipAssignment(workspace, member.user, req.body.role, req.params.userId);
+  const previousRole = member.role;
   const wasProjectManager = member.role === "project_manager";
   member.role = req.body.role;
   await workspace.save();
@@ -283,6 +287,9 @@ const updateRole = asyncHandler(async (req, res) => {
       { workspace: workspace._id, projectManager: req.params.userId },
       { $set: { projectManager: null } }
     );
+  }
+  if (previousRole !== member.role || wasProjectManager) {
+    await revokeUser(req.app.get("io"), workspace.organizationId, req.params.userId, await roomsForWorkspace(workspace));
   }
   const changed = await User.findById(req.params.userId).select("name");
   await logActivity(req.app.get("io"), {
@@ -305,7 +312,7 @@ const updateRole = asyncHandler(async (req, res) => {
 
 const updateOrganizationMember = asyncHandler(async (req, res) => {
   const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
-  requireRole(workspace, req.user._id, ["owner", "admin", "ceo", "managing_director"]);
+  await requirePermission("workspace:organization_update", workspace, req.user);
   const member = workspace.members.find((m) => getMemberUserId(m) === req.params.userId);
   if (!member) throw new AppError("Member not found", 404);
 
@@ -343,7 +350,7 @@ const updateOrganizationMember = asyncHandler(async (req, res) => {
 
 const updateOrganization = asyncHandler(async (req, res) => {
   const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
-  requireRole(workspace, req.user._id, ["owner", "admin", "ceo", "managing_director"]);
+  await requirePermission("workspace:organization_update", workspace, req.user);
 
   workspace.organization.departments = req.body.departments;
   workspace.organization.version = 2;
@@ -361,9 +368,8 @@ const updateOrganization = asyncHandler(async (req, res) => {
 
 const removeMember = asyncHandler(async (req, res) => {
   const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
-  const actor = requireRole(workspace, req.user._id, [
-    "owner", "admin", "ceo", "managing_director", ...Object.keys(TEAM_LEAD_INVITE_ROLES),
-  ]);
+  await requirePermission("member:remove", workspace, req.user);
+  const actor = requireMember(workspace, req.user._id);
   const targetId = req.params.userId;
   const target = workspace.members.find((m) => getMemberUserId(m) === targetId);
   if (!target) throw new AppError("Member not found", 404);
@@ -394,6 +400,7 @@ const removeMember = asyncHandler(async (req, res) => {
   }
   await Channel.updateMany({ workspace: workspace._id }, { $pull: { members: targetId } });
   await Task.updateMany({ workspace: workspace._id }, { $pull: { assignees: targetId } });
+  await revokeUser(req.app.get("io"), workspace.organizationId, targetId, await roomsForWorkspace(workspace));
   const removed = await User.findById(targetId).select("name");
   await logActivity(req.app.get("io"), {
     workspace: workspace._id,
