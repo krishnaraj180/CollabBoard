@@ -16,6 +16,13 @@ const { sendPasswordResetEmail } = require("../utils/mailer");
 const { sendEmailVerificationEmail } = require("../utils/mailer");
 const Session = require("../models/Session");
 const SecurityEvent = require("../models/SecurityEvent");
+const { revokeSession } = require("../services/realtimeAccess");
+
+function revokeAfterResponse(res, io, sessions) {
+  res.once("finish", () => Promise.all(sessions.map((session) => revokeSession(io, session._id))).catch((error) => {
+    console.error("Session socket revocation failed:", error.message);
+  }));
+}
 
 const registerSchema = z.object({
   body: z.object({
@@ -204,6 +211,7 @@ const deleteSession = asyncHandler(async (req, res) => {
   if (!session) throw new AppError("Session not found", 404);
   if (req.session?._id.equals(session._id)) throw new AppError("Use sign out to end your current session", 400);
   await session.deleteOne();
+  await revokeSession(req.app.get("io"), session._id);
   await recordSecurityEvent(req, req.user._id, "session_revoked");
   res.json({ ok: true });
 });
@@ -220,6 +228,7 @@ const changePassword = asyncHandler(async (req, res) => {
   // Ending every other session: old tokens carry the previous version number.
   user.tokenVersion += 1;
   await user.save();
+  const sessions = await Session.find({ user: user._id }).select("_id").lean();
   await Session.deleteMany({ user: user._id });
   await recordSecurityEvent(req, user._id, "password_changed");
   const sessionPolicy = Object.values(SESSION_POLICIES).includes(req.auth?.sessionPolicy)
@@ -227,6 +236,7 @@ const changePassword = asyncHandler(async (req, res) => {
     : SESSION_POLICIES.STANDARD;
   await issueSession(user, req, res, sessionPolicy);
   notifySessionChange(req, res, user._id);
+  revokeAfterResponse(res, req.app.get("io"), sessions);
   res.json({ ok: true });
 });
 
@@ -258,19 +268,23 @@ const resetPassword = asyncHandler(async (req, res) => {
   user.lockedUntil = null;
   user.tokenVersion += 1;
   await user.save();
+  const sessions = await Session.find({ user: user._id }).select("_id").lean();
   await Session.deleteMany({ user: user._id });
   await recordSecurityEvent(req, user._id, "password_changed");
   clearAuthCookie(res);
   notifySessionChange(req, res, user._id);
+  revokeAfterResponse(res, req.app.get("io"), sessions);
   res.json({ ok: true });
 });
 
 const revokeSessions = asyncHandler(async (req, res) => {
   await User.findByIdAndUpdate(req.user._id, { $inc: { tokenVersion: 1 } });
+  const sessions = await Session.find({ user: req.user._id }).select("_id").lean();
   await Session.deleteMany({ user: req.user._id });
   await recordSecurityEvent(req, req.user._id, "sessions_revoked");
   clearAuthCookie(res);
   notifySessionChange(req, res, req.user._id);
+  revokeAfterResponse(res, req.app.get("io"), sessions);
   res.json({ ok: true });
 });
 

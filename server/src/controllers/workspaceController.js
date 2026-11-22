@@ -14,6 +14,7 @@ const { ASSIGNABLE_WORKSPACE_ROLES } = require("../utils/access");
 const { resolveTenantFromParent } = require("../utils/organizationAccess");
 const { secureBody } = require("../utils/inputSecurity");
 const { listScope, loadTenantResource } = require("../services/tenantAccess");
+const { grantUser, revokeUser, roomsForWorkspace } = require("../services/realtimeAccess");
 
 const TEAM_LEAD_INVITE_ROLES = {
   team_lead: ["frontend_developer", "backend_developer", "react_developer", "ui_developer", "nodejs_developer", "java_developer", "python_developer"],
@@ -147,6 +148,7 @@ const create = asyncHandler(async (req, res) => {
     organization: { version: 3, departments: DEFAULT_DEPARTMENTS },
   });
   await ensureGeneralChannel(workspace, req.user._id);
+  await grantUser(req.app.get("io"), workspace.organizationId, req.user._id, await roomsForWorkspace(workspace));
   const populated = await workspace.populate("members.user", "name email avatarColor lastSeenAt");
   res.status(201).json({ workspace: populated });
 });
@@ -234,6 +236,7 @@ const invite = asyncHandler(async (req, res) => {
     general.members.push(invitee._id);
     await general.save();
   }
+  await grantUser(req.app.get("io"), workspace.organizationId, invitee._id, await roomsForWorkspace(workspace));
 
   await notifyUsers(req.app.get("io"), [invitee._id], {
     resource: workspace,
@@ -275,6 +278,7 @@ const updateRole = asyncHandler(async (req, res) => {
     throw new AppError("The CEO cannot remove their own company role", 403);
   }
   await validateLeadershipAssignment(workspace, member.user, req.body.role, req.params.userId);
+  const previousRole = member.role;
   const wasProjectManager = member.role === "project_manager";
   member.role = req.body.role;
   await workspace.save();
@@ -283,6 +287,9 @@ const updateRole = asyncHandler(async (req, res) => {
       { workspace: workspace._id, projectManager: req.params.userId },
       { $set: { projectManager: null } }
     );
+  }
+  if (previousRole !== member.role || wasProjectManager) {
+    await revokeUser(req.app.get("io"), workspace.organizationId, req.params.userId, await roomsForWorkspace(workspace));
   }
   const changed = await User.findById(req.params.userId).select("name");
   await logActivity(req.app.get("io"), {
@@ -394,6 +401,7 @@ const removeMember = asyncHandler(async (req, res) => {
   }
   await Channel.updateMany({ workspace: workspace._id }, { $pull: { members: targetId } });
   await Task.updateMany({ workspace: workspace._id }, { $pull: { assignees: targetId } });
+  await revokeUser(req.app.get("io"), workspace.organizationId, targetId, await roomsForWorkspace(workspace));
   const removed = await User.findById(targetId).select("name");
   await logActivity(req.app.get("io"), {
     workspace: workspace._id,

@@ -1,5 +1,4 @@
-const { AppError } = require("./errors");
-const { getMembership } = require("../services/tenantAccess");
+const { getMembership, requirePermission: requireTenantPermission } = require("../services/tenantAccess");
 
 function modelName(parent) {
   return parent?.constructor?.modelName || parent?.$__?.model?.constructor?.modelName || null;
@@ -56,14 +55,7 @@ function canAccessOrganizationProject(project, membership, userId, platformRole 
 }
 
 async function requireOrganizationPermission(organization, user, permission) {
-  const membership = await organizationMemberOf(organization, user._id);
-  if (!membership && user.platformRole !== "super_admin") {
-    throw new AppError("You do not have access to this organization", 404);
-  }
-  if (!hasOrganizationPermission(user, membership, permission)) {
-    throw new AppError(`Insufficient organization permissions: cannot perform "${permission}"`, 403);
-  }
-  return membership;
+  return requireTenantPermission(permission, organization, user);
 }
 
 module.exports = {

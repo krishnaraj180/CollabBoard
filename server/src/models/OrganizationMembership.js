@@ -9,6 +9,7 @@ const organizationMembershipSchema = new mongoose.Schema(
     organizationId: { type: mongoose.Schema.Types.ObjectId, ref: "Organization", required: true },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     role: { type: String, enum: MEMBERSHIP_ROLES, required: true },
+    roleId: { type: mongoose.Schema.Types.ObjectId, ref: "Role", default: null, index: true },
     status: { type: String, enum: MEMBERSHIP_STATUSES, required: true, default: "active" },
     department: { type: String, default: "", trim: true, maxlength: 60 },
     title: { type: String, default: "", trim: true, maxlength: 60 },

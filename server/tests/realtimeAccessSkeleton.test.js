@@ -1,28 +1,31 @@
-const fs = require("fs");
-const path = require("path");
+const { grantUser, revokeUser, revokeOrganization, revokeSession } = require("../src/services/realtimeAccess");
 
-test("realtime access helpers are declarations only and are not wired yet", () => {
-  const sourceRoot = path.join(__dirname, "..", "src");
-  const accessFile = path.join(sourceRoot, "services", "realtimeAccess.js");
-  const source = fs.readFileSync(accessFile, "utf8");
-  expect(source).toMatch(/function revokeUser\(/);
-  expect(source).toMatch(/function revokeOrganization\(/);
-  expect(source).toMatch(/function grantUser\(/);
-
-  const files = [];
-  const visit = (directory) => {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      const fullPath = path.join(directory, entry.name);
-      if (entry.isDirectory()) visit(fullPath);
-      else if (entry.name.endsWith(".js") && fullPath !== accessFile) files.push(fullPath);
-    }
+function fakeIo() {
+  const calls = [];
+  return {
+    calls,
+    in(room) {
+      return {
+        async socketsJoin(rooms) { calls.push({ op: "join", room, rooms }); },
+        async socketsLeave(rooms) { calls.push({ op: "leave", room, rooms }); },
+        async disconnectSockets(force) { calls.push({ op: "disconnect", room, force }); },
+        async fetchSockets() { return [{ id: "socket-1", rooms: new Set([room, "org:o1:project:p1"]) }]; },
+      };
+    },
+    async fetchSockets() { return [{ id: "socket-1", rooms: new Set(["org:o1:project:p1"]) }]; },
   };
-  visit(sourceRoot);
-  const callSites = files.flatMap((file) => {
-    const text = fs.readFileSync(file, "utf8");
-    return ["revokeUser", "revokeOrganization", "grantUser"]
-      .filter((name) => new RegExp(`realtimeAccess\\.${name}\\s*\\(`).test(text))
-      .map((name) => `${file}:${name}`);
-  });
-  expect(callSites).toEqual([]);
+}
+
+test("grant and revoke use adapter room operations without a socket registry", async () => {
+  const io = fakeIo();
+  await grantUser(io, "o1", "u1", ["org:o1:project:p1"]);
+  await revokeUser(io, "o1", "u1", ["org:o1:project:p1"]);
+  await revokeOrganization(io, "o1");
+  await revokeSession(io, "s1");
+  expect(io.calls).toEqual([
+    { op: "join", room: "user:u1", rooms: ["org:o1:project:p1"] },
+    { op: "leave", room: "socket-1", rooms: ["org:o1:project:p1"] },
+    { op: "disconnect", room: "socket-1", force: true },
+    { op: "disconnect", room: "session:s1", force: true },
+  ]);
 });

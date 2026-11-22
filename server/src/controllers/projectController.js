@@ -18,6 +18,7 @@ const { logActivity } = require("../utils/activity");
 const { secureBody } = require("../utils/inputSecurity");
 const { loadTenantResource } = require("../services/tenantAccess");
 const { listScope } = require("../services/tenantAccess");
+const { grantUser, roomsForWorkspace } = require("../services/realtimeAccess");
 
 /* ------------------------------------------------------------------ */
 /* Validation                                                          */
@@ -958,6 +959,15 @@ const updateProject = asyncHandler(async (req, res) => {
   }
   await project.save();
 
+  const projectRoomSet = await roomsForWorkspace(workspace);
+  const assignedUsers = new Set([
+    project.projectManager && String(project.projectManager),
+    ...project.departmentAssignments.flatMap((assignment) => assignment.members.map((id) => String(id))),
+  ].filter(Boolean));
+  for (const assignedUserId of assignedUsers) {
+    await grantUser(io, workspace.organizationId, assignedUserId, projectRoomSet);
+  }
+
   await project.populate("projectManager", USER_FIELDS);
   const [withStats] = await statsForProjects([project]);
   emitToProjectWorkspace(io, workspace.members, project, "project:updated", { project: withStats });
@@ -1026,6 +1036,10 @@ const addProjectTeamMembers = asyncHandler(async (req, res) => {
   if (addedMemberIds.length) {
     await project.save();
     io = req.app.get("io");
+    const projectRoomSet = await roomsForWorkspace(workspace);
+    for (const addedMemberId of addedMemberIds) {
+      await grantUser(io, workspace.organizationId, addedMemberId, projectRoomSet);
+    }
     summary = `added ${addedMemberIds.length} member${addedMemberIds.length === 1 ? "" : "s"} to ${department}`;
     await logActivity(io, {
       workspace: workspace._id,

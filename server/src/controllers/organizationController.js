@@ -19,9 +19,13 @@ const {
   createMembership,
   findMembership,
   assertOwnerInvariant,
+  syncMembershipRole,
 } = require("../utils/organizationMembership");
 const { loadTenantResource } = require("../services/tenantAccess");
 const { activeOrganizationsFor } = require("../services/tenantAccess");
+const { grantUser, revokeUser, roomsForWorkspace, roomsForOrganization } = require("../services/realtimeAccess");
+const { seedSystemRoles } = require("../services/roleService");
+const { recordAdminEvent } = require("../utils/adminEvents");
 
 const roles = Organization.ORGANIZATION_ROLES;
 const createSchema = z.object({
@@ -272,11 +276,13 @@ const create = asyncHandler(async (req, res) => {
     settings: { onboardingState: "development" },
     members: [{ user: req.user._id, role: "organization_admin", status: "active" }],
   });
+  await seedSystemRoles(organization._id);
   await createMembership({
     organizationId: organization._id,
     userId: req.user._id,
     role: "organization_owner",
   });
+  await grantUser(req.app.get("io"), organization._id, req.user._id);
   res.status(201).json({ organization: await formatOrganization(organization) });
 });
 
@@ -603,6 +609,7 @@ const acceptInvitation = asyncHandler(async (req, res) => {
     throw error;
   }
   const organization = await loadOrganization(invitation.organization, req.user);
+  await grantUser(req.app.get("io"), organization._id, req.user._id);
   res.json({ organization: await formatOrganization(organization) });
 });
 
@@ -631,6 +638,7 @@ const updateMember = asyncHandler(async (req, res) => {
     throw new AppError("Choose a position from the selected department", 400);
   }
   const nextRole = changes.role || member.role;
+  const previousRole = member.role;
   await assertOwnerInvariant(organization._id, membership, nextRole);
   if (member.role === "organization_admin" && nextRole !== member.role) {
     const remainingAdmins = organization.members.filter((item) =>
@@ -650,12 +658,20 @@ const updateMember = asyncHandler(async (req, res) => {
     });
   }
   if (changes.role !== undefined || changes.department !== undefined || changes.title !== undefined) {
-    membership.role = nextRole;
+    await syncMembershipRole(membership, nextRole);
     membership.department = member.department;
     membership.title = member.title;
     await membership.save();
+    recordAdminEvent({ organizationId: organization._id, actorId: req.user._id, targetUserId: req.params.userId, action: "role_updated", role: nextRole });
   }
   await organization.save();
+  if (changes.role !== undefined) {
+    const rooms = await roomsForOrganization(organization._id);
+    await revokeUser(req.app.get("io"), organization._id, req.params.userId, rooms);
+    if (nextRole === "organization_admin" || nextRole === "organization_owner" || previousRole === "viewer") {
+      await grantUser(req.app.get("io"), organization._id, req.params.userId, rooms);
+    }
+  }
   res.json({ organization: await formatOrganization(organization) });
 });
 
@@ -690,6 +706,7 @@ const removeMember = asyncHandler(async (req, res) => {
     { _id: membership._id, status: "active" },
     { $set: { status: "revoked", revokedAt: new Date() } }
   );
+  await revokeUser(req.app.get("io"), organization._id, req.params.userId, await roomsForOrganization(organization._id));
   res.json({ organization: await formatOrganization(organization) });
 });
 
@@ -788,6 +805,11 @@ const linkWorkspace = asyncHandler(async (req, res) => {
   });
   await workspace.save();
   await organization.save();
+  const linkedRooms = await roomsForWorkspace(workspace);
+  for (const member of workspace.members) {
+    const memberId = getMemberUserId(member);
+    if (memberId) await grantUser(req.app.get("io"), organization._id, memberId, linkedRooms);
+  }
   res.json({ organization: await formatOrganization(organization) });
 });
 
@@ -803,8 +825,17 @@ const unlinkWorkspace = asyncHandler(async (req, res) => {
   )) {
     throw new AppError("Unassign this workspace from its company location before unlinking it", 409);
   }
+  const previousRooms = await roomsForWorkspace(workspace);
   workspace.organizationId = null;
   await workspace.save();
+  const legacyRooms = await roomsForWorkspace(workspace);
+  for (const member of workspace.members) {
+    const memberId = getMemberUserId(member);
+    if (memberId) {
+      await revokeUser(req.app.get("io"), organization._id, memberId, previousRooms);
+      await grantUser(req.app.get("io"), null, memberId, legacyRooms);
+    }
+  }
   res.json({ organization: await formatOrganization(organization) });
 });
 

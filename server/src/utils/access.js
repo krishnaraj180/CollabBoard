@@ -1,4 +1,5 @@
 const { AppError } = require("./errors");
+const { isKnownPermission } = require("../config/permissionCatalog");
 
 const ROLES = {
   OWNER: "owner",
@@ -139,6 +140,7 @@ function requireRole(workspace, userId, roles) {
 }
 
 function hasPermission(role, permission) {
+  if (!isKnownPermission(permission)) throw new TypeError(`Unknown permission string: ${permission}`);
   const allowed = PERMISSIONS[permission];
   return allowed ? allowed.includes(role) : false;
 }
