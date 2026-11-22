@@ -3,7 +3,7 @@ const { PERMISSIONS } = require("../config/permissionCatalog");
 const allPermissions = [...PERMISSIONS];
 const SYSTEM_ROLE_DEFINITIONS = Object.freeze([
   { key: "owner", name: "Owner", legacyRoles: ["organization_owner", "owner"], permissions: allPermissions },
-  { key: "admin", name: "Admin", legacyRoles: ["organization_admin", "admin"], permissions: ["organization:read", "organization:update", "organization:invite", "organization:members", "organization:departments", "organization:workspaces", "organization:reports", "organization:proposals"] },
+  { key: "admin", name: "Admin", legacyRoles: ["organization_admin", "admin"], permissions: ["organization:read", "organization:update", "organization:invite", "organization:members", "organization:departments", "organization:workspaces", "organization:reports", "organization:proposals", "workspace:update", "workspace:organization_update", "member:invite", "member:remove", "member:role"] },
   { key: "project_manager", name: "Project Manager", legacyRoles: ["project_manager"], permissions: ["organization:read", "organization:reports"] },
   { key: "dev_lead", name: "Dev Lead", legacyRoles: ["engineering_manager", "development_team_lead", "team_lead"], permissions: ["organization:read", "organization:reports"] },
   { key: "qa", name: "QA", legacyRoles: ["qa_manager", "qa_team_lead", "qa_engineer", "qa_tester"], permissions: ["organization:read", "organization:reports"] },

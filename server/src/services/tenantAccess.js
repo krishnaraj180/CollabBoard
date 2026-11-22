@@ -6,7 +6,7 @@ const Channel = require("../models/Channel");
 const Role = require("../models/Role");
 const { isKnownPermission } = require("../config/permissionCatalog");
 const { legacyToSystemRole } = require("./roleMapping");
-const { memberOf } = require("../utils/access");
+const { memberOf, hasPermission: hasLegacyPermission } = require("../utils/access");
 const { AppError } = require("../utils/errors");
 const { tenantNotFound, organizationSuspended } = require("../utils/tenantErrors");
 const { env } = require("../config/env");
@@ -201,21 +201,25 @@ async function requirePermission(permission, resource, user) {
   if (!resource || !user) throw tenantNotFound();
   if (user.platformRole === "super_admin") return null;
   const organizationId = resourceOrganizationId(resource);
+  const directWorkspaceMembership = resource.constructor?.modelName === "Workspace" ? memberOf(resource, user._id) : null;
+  if (resource.constructor?.modelName === "Workspace" && !directWorkspaceMembership) throw new AppError("Insufficient workspace permissions", 403);
   if (!organizationId) {
-    const workspace = resource.workspace?.organizationId === undefined ? resource.workspace : resource;
-    const legacyMembership = legacyWorkspaceMembership(workspace, user._id);
-    if (!legacyMembership) throw tenantNotFound();
+    const legacyMembership = directWorkspaceMembership || legacyWorkspaceMembership(resource.workspace, user._id);
+    if (!legacyMembership || !hasLegacyPermission(legacyMembership.role, permission)) throw new AppError(`Insufficient permissions: cannot perform "${permission}"`, 403);
     return legacyMembership;
   }
   const membership = await getMembership(user._id, organizationId);
-  if (!membership) throw tenantNotFound();
+  if (!membership) {
+    if (directWorkspaceMembership && hasLegacyPermission(directWorkspaceMembership.role, permission)) return directWorkspaceMembership;
+    throw tenantNotFound();
+  }
   let permissions;
   if (membership.roleId) {
     const role = await Role.findOne({ _id: membership.roleId, organizationId }).select("permissions").lean();
     permissions = role?.permissions;
   }
   if (!permissions) permissions = legacyToSystemRole(membership.role).permissions;
-  if (permissions.includes(permission)) return membership;
+  if (permissions.includes(permission) || (directWorkspaceMembership && hasLegacyPermission(directWorkspaceMembership.role, permission))) return membership;
   throw new AppError(`Insufficient organization permissions: cannot perform "${permission}"`, 403);
 }
 

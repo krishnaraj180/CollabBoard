@@ -8,6 +8,7 @@ const PERMISSIONS = Object.freeze([
   "organization:reports",
   "organization:proposals",
   "workspace:update",
+  "workspace:organization_update",
   "workspace:delete",
   "member:invite",
   "member:remove",

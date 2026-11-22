@@ -4,7 +4,7 @@ const Organization = require("../models/Organization");
 const Channel = require("../models/Channel");
 const User = require("../models/User");
 const { AppError, asyncHandler } = require("../utils/errors");
-const { requireMember, requireRole, getMemberUserId } = require("../utils/access");
+const { requireMember, getMemberUserId } = require("../utils/access");
 const Task = require("../models/Task");
 const Project = require("../models/Project");
 const { notifyUsers } = require("../utils/notify");
@@ -13,7 +13,7 @@ const { DEFAULT_DEPARTMENTS } = require("../utils/organization");
 const { ASSIGNABLE_WORKSPACE_ROLES } = require("../utils/access");
 const { resolveTenantFromParent } = require("../utils/organizationAccess");
 const { secureBody } = require("../utils/inputSecurity");
-const { listScope, loadTenantResource } = require("../services/tenantAccess");
+const { listScope, loadTenantResource, requirePermission } = require("../services/tenantAccess");
 const { grantUser, revokeUser, roomsForWorkspace } = require("../services/realtimeAccess");
 
 const TEAM_LEAD_INVITE_ROLES = {
@@ -190,9 +190,8 @@ const getOne = asyncHandler(async (req, res) => {
 
 const invite = asyncHandler(async (req, res) => {
   const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
-  const actor = requireRole(workspace, req.user._id, [
-    "owner", "admin", "ceo", "managing_director", ...Object.keys(TEAM_LEAD_INVITE_ROLES),
-  ]);
+  await requirePermission("member:invite", workspace, req.user);
+  const actor = requireMember(workspace, req.user._id);
   const permittedTeamRoles = TEAM_LEAD_INVITE_ROLES[actor.role];
   if (permittedTeamRoles && !permittedTeamRoles.includes(req.body.role)) {
     throw new AppError("Team leads can only invite members to their own team", 403);
@@ -260,7 +259,7 @@ const invite = asyncHandler(async (req, res) => {
 
 const update = asyncHandler(async (req, res) => {
   const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
-  requireRole(workspace, req.user._id, ["owner", "admin", "ceo"]);
+  await requirePermission("workspace:update", workspace, req.user);
   if (req.body.name !== undefined) workspace.name = req.body.name;
   if (req.body.description !== undefined) workspace.description = req.body.description;
   await workspace.save();
@@ -270,7 +269,8 @@ const update = asyncHandler(async (req, res) => {
 
 const updateRole = asyncHandler(async (req, res) => {
   const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
-  const actor = requireRole(workspace, req.user._id, ["owner", "ceo"]);
+  await requirePermission("member:role", workspace, req.user);
+  const actor = requireMember(workspace, req.user._id);
   const member = workspace.members.find((m) => getMemberUserId(m) === req.params.userId);
   if (!member) throw new AppError("Member not found", 404);
   if (member.role === "owner") throw new AppError("Cannot change the owner role", 400);
@@ -312,7 +312,7 @@ const updateRole = asyncHandler(async (req, res) => {
 
 const updateOrganizationMember = asyncHandler(async (req, res) => {
   const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
-  requireRole(workspace, req.user._id, ["owner", "admin", "ceo", "managing_director"]);
+  await requirePermission("workspace:organization_update", workspace, req.user);
   const member = workspace.members.find((m) => getMemberUserId(m) === req.params.userId);
   if (!member) throw new AppError("Member not found", 404);
 
@@ -350,7 +350,7 @@ const updateOrganizationMember = asyncHandler(async (req, res) => {
 
 const updateOrganization = asyncHandler(async (req, res) => {
   const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
-  requireRole(workspace, req.user._id, ["owner", "admin", "ceo", "managing_director"]);
+  await requirePermission("workspace:organization_update", workspace, req.user);
 
   workspace.organization.departments = req.body.departments;
   workspace.organization.version = 2;
@@ -368,9 +368,8 @@ const updateOrganization = asyncHandler(async (req, res) => {
 
 const removeMember = asyncHandler(async (req, res) => {
   const workspace = await loadTenantResource(Workspace, req.params.id, req.user, { route: req.originalUrl });
-  const actor = requireRole(workspace, req.user._id, [
-    "owner", "admin", "ceo", "managing_director", ...Object.keys(TEAM_LEAD_INVITE_ROLES),
-  ]);
+  await requirePermission("member:remove", workspace, req.user);
+  const actor = requireMember(workspace, req.user._id);
   const targetId = req.params.userId;
   const target = workspace.members.find((m) => getMemberUserId(m) === targetId);
   if (!target) throw new AppError("Member not found", 404);
