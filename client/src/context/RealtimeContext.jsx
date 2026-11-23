@@ -42,8 +42,11 @@ export function RealtimeProvider({ children }) {
     next.on("disconnect", () => setSocketDown(true));
     next.on("connect_error", (error) => {
       setSocketDown(true);
-      if (["Authentication required", "Invalid session", "Session has ended", "User no longer exists"].includes(error.message)) {
-        window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+      if (
+        ["Authentication required", "Invalid session", "Session has ended", "User no longer exists"]
+          .includes(error.message)
+      ) {
+        window.dispatchEvent(new Event(SESSION_CHECK_EVENT));
       }
     });
     next.on("auth:session-changed", () => {
