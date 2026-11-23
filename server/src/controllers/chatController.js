@@ -11,6 +11,7 @@ const { notifyUsers } = require("../utils/notify");
 const { resolveTenantFromParent } = require("../utils/organizationAccess");
 const { secureBody } = require("../utils/inputSecurity");
 const { loadTenantResource } = require("../services/tenantAccess");
+const { requirePermission } = require("../services/tenantAccess");
 const { grantUser, allRoomVariants } = require("../services/realtimeAccess");
 
 const channelSchema = z.object({
@@ -68,6 +69,7 @@ const listChannels = asyncHandler(async (req, res) => {
 
 const createChannel = asyncHandler(async (req, res) => {
   const { workspace, membership } = await loadWorkspace(req.params.workspaceId, req.user._id);
+  if (workspace.organizationId) await requirePermission("channel:create", workspace, req.user);
   requireWritableMember(membership);
   const memberIds = new Set([String(req.user._id), ...(req.body.memberIds || [])]);
   if (req.body.type === "dm" && memberIds.size !== 2) throw new AppError("Direct messages require exactly one other member", 400);
@@ -109,6 +111,7 @@ const listMessages = asyncHandler(async (req, res) => {
 const createMessage = asyncHandler(async (req, res) => {
   const channel = await loadTenantResource(Channel, req.params.channelId, req.user, { populate: "workspace", route: req.originalUrl });
   const { workspace, membership } = await loadWorkspace(channel.workspace, req.user._id);
+  if (workspace.organizationId) await requirePermission("channel:message", channel, req.user);
   requireWritableMember(membership);
   assertChannelMember(channel, req.user._id);
 
@@ -161,6 +164,7 @@ async function loadMessage(req) {
 
 const updateMessage = asyncHandler(async (req, res) => {
   const { channel, membership, message } = await loadMessage(req);
+  if (channel.organizationId) await requirePermission("channel:message", channel, req.user);
   requireWritableMember(membership);
   if (String(message.sender) !== String(req.user._id)) throw new AppError("You can only edit your own messages", 403);
   message.body = req.body.body.trim();
@@ -173,6 +177,7 @@ const updateMessage = asyncHandler(async (req, res) => {
 
 const deleteMessage = asyncHandler(async (req, res) => {
   const { channel, membership, message } = await loadMessage(req);
+  if (channel.organizationId) await requirePermission("channel:message", channel, req.user);
   requireWritableMember(membership);
   if (String(message.sender) !== String(req.user._id) && membership.role !== "owner" && membership.role !== "admin") {
     throw new AppError("You can only delete your own messages", 403);

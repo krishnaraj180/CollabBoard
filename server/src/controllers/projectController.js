@@ -12,6 +12,7 @@ const { PRIORITIES } = Task;
 const { AppError, asyncHandler } = require("../utils/errors");
 const { requireMember, memberOf, isManager, getMemberUserId, canAccessProject } = require("../utils/access");
 const { organizationMemberOf, canAccessOrganizationProject } = require("../utils/organizationAccess");
+const { requirePermission } = require("../services/tenantAccess");
 const { emitToProjectWorkspace } = require("../services/realtimeEmit");
 const { notifyUsers } = require("../utils/notify");
 const { logActivity } = require("../utils/activity");
@@ -737,6 +738,7 @@ const list = asyncHandler(async (req, res) => {
 
 const create = asyncHandler(async (req, res) => {
   const { workspace, membership, organizationMembership } = await loadWorkspace(req.params.workspaceId, req.user._id, req.user.platformRole);
+  if (workspace.organizationId) await requirePermission("project:create", workspace, req.user);
   if (workspace.organizationId) {
     throw new AppError("Company projects must be submitted as proposals and approved by the CEO", 403);
   }
@@ -845,6 +847,7 @@ const getBoard = asyncHandler(async (req, res) => {
 
 const updateProject = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organization, organizationMembership } = await loadProject(req);
+  if (organization) await requirePermission("project:update", project, req.user);
   requireActiveProject(project);
   const canManageProject = canManageAssignedProject(project, membership, req.user._id, organizationMembership);
   if (!canManageProject) requireManager(membership, organizationMembership);
@@ -992,6 +995,7 @@ const updateProject = asyncHandler(async (req, res) => {
 
 const addProjectTeamMembers = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organization, organizationMembership } = await loadProject(req);
+  if (organization) await requirePermission("project:update", project, req.user);
   const leadsAssignedDepartment = organizationMembership?.role === "team_lead" &&
     project.departmentAssignments.some((item) =>
       item.department === organizationMembership.department &&
@@ -1070,6 +1074,7 @@ const addProjectTeamMembers = asyncHandler(async (req, res) => {
 
 const removeProject = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("project:delete", project, req.user);
   requireManager(membership, organizationMembership);
   const io = req.app.get("io");
   await Task.deleteMany({ project: project._id });
@@ -1093,6 +1098,7 @@ const removeProject = asyncHandler(async (req, res) => {
 
 const archiveProject = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("project:update", project, req.user);
   requireManager(membership, organizationMembership);
   if (!project.archivedAt) {
     project.archivedAt = new Date();
@@ -1105,6 +1111,7 @@ const archiveProject = asyncHandler(async (req, res) => {
 
 const restoreProject = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("project:update", project, req.user);
   requireManager(membership, organizationMembership);
   project.archivedAt = null;
   project.archivedBy = null;
@@ -1131,6 +1138,7 @@ function notifyAssignees(io, { workspace, project, task, actor, ids, title, type
 
 const createTask = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("task:create", project, req.user);
   requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   requireTaskWorkStage(project, membership, req.user._id, organizationMembership);
@@ -1200,6 +1208,7 @@ const createTask = asyncHandler(async (req, res) => {
 
 const updateTask = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("task:update", project, req.user);
   requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   requireTaskWorkStage(project, membership, req.user._id, organizationMembership);
@@ -1328,6 +1337,7 @@ const updateTask = asyncHandler(async (req, res) => {
 
 const reorderTasks = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("task:move", project, req.user);
   requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   requireTaskWorkStage(project, membership, req.user._id, organizationMembership);
@@ -1456,6 +1466,7 @@ const listSprints = asyncHandler(async (req, res) => {
 
 const createSprint = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("project:update", project, req.user);
   requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   const startDate = parseDate(req.body.startDate);
   const endDate = parseDate(req.body.endDate);
@@ -1484,6 +1495,7 @@ const createSprint = asyncHandler(async (req, res) => {
 
 const updateSprint = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("project:update", project, req.user);
   requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.sprintId, "sprint id");
   const sprint = await Sprint.findOne({ _id: req.params.sprintId, project: project._id });
@@ -1513,6 +1525,7 @@ const updateSprint = asyncHandler(async (req, res) => {
 
 const startSprint = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("project:update", project, req.user);
   requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.sprintId, "sprint id");
   const sprint = await Sprint.findOne({ _id: req.params.sprintId, project: project._id });
@@ -1543,6 +1556,7 @@ const startSprint = asyncHandler(async (req, res) => {
 
 const completeSprint = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("project:update", project, req.user);
   requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.sprintId, "sprint id");
   const sprint = await Sprint.findOne({ _id: req.params.sprintId, project: project._id });
@@ -1571,6 +1585,7 @@ const listMilestones = asyncHandler(async (req, res) => {
 
 const createMilestone = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("project:update", project, req.user);
   requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   const dueDate = parseDate(req.body.dueDate);
   project.projectMilestones.push({
@@ -1594,6 +1609,7 @@ const createMilestone = asyncHandler(async (req, res) => {
 
 const updateMilestone = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("project:update", project, req.user);
   requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.milestoneId, "milestone id");
   const milestone = project.projectMilestones.id(req.params.milestoneId);
@@ -1620,6 +1636,7 @@ const updateMilestone = asyncHandler(async (req, res) => {
 
 const completeMilestone = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("project:update", project, req.user);
   requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.milestoneId, "milestone id");
   const milestone = project.projectMilestones.id(req.params.milestoneId);
@@ -1641,6 +1658,7 @@ const completeMilestone = asyncHandler(async (req, res) => {
 
 const removeMilestone = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("project:update", project, req.user);
   requireProjectPlanner(project, membership, req.user._id, organizationMembership);
   assertObjectId(req.params.milestoneId, "milestone id");
   const milestone = project.projectMilestones.id(req.params.milestoneId);
@@ -1669,6 +1687,7 @@ const removeTask = asyncHandler(async (req, res) => {
   const existing = await Task.findOne({ _id: req.params.taskId, project: project._id });
   if (!existing) throw new AppError("Task not found", 404);
   const isCreator = String(existing.createdBy) === String(req.user._id);
+  if (!isCreator && workspace.organizationId) await requirePermission("task:delete", project, req.user);
   if (!isCreator && !canManageAssignedProject(project, membership, req.user._id, organizationMembership)) {
     throw new AppError("Only the creator, assigned project manager, or workspace admin can delete this task", 403);
   }
@@ -1701,6 +1720,7 @@ const removeTask = asyncHandler(async (req, res) => {
 
 const addComment = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("task:comment", project, req.user);
   requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   assertObjectId(req.params.taskId, "task id");
@@ -1742,6 +1762,7 @@ const addComment = asyncHandler(async (req, res) => {
 
 const removeComment = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("task:comment", project, req.user);
   requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   assertObjectId(req.params.taskId, "task id");
@@ -1766,6 +1787,7 @@ const removeComment = asyncHandler(async (req, res) => {
 
 const updateComment = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("task:comment", project, req.user);
   requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   const task = await Task.findOne({ _id: req.params.taskId, project: project._id });
@@ -1938,6 +1960,8 @@ module.exports = {
   addComment,
   removeComment,
   updateComment,
+  assertAssigneesInWorkspace,
+  validateTaskDependencies,
   projectActivity,
   myTasks,
   dashboard,

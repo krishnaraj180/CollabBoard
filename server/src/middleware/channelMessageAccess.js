@@ -2,11 +2,14 @@ const Channel = require("../models/Channel");
 const { AppError, asyncHandler } = require("../utils/errors");
 const { requireMember } = require("../utils/access");
 const { loadTenantResource } = require("../services/tenantAccess");
+const { requirePermission } = require("../services/tenantAccess");
 
 const authorizeChannelMessage = asyncHandler(async (req, res, next) => {
   const { channelId } = req.params;
   const channel = await loadTenantResource(Channel, channelId, req.user, { populate: "workspace", route: req.originalUrl });
   const workspace = channel.workspace;
+
+  if (workspace.organizationId) await requirePermission("channel:message", channel, req.user);
 
   const membership = requireMember(workspace, req.user._id);
   if (membership.role === "viewer") {

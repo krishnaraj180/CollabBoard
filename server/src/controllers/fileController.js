@@ -10,18 +10,21 @@ const { loadTenantResource, listScope } = require("../services/tenantAccess");
 
 const ALLOWED = /^[\w.\-]+$/;
 
-const serve = asyncHandler(async (req, res) => {
-  const name = req.params.filename;
-  if (!ALLOWED.test(name)) throw new AppError("Invalid filename", 400);
-  const scope = await listScope(req.user._id);
-  const message = await Message.findOne({
+async function findTenantMessageForFile(name, userId) {
+  const scope = await listScope(userId);
+  return Message.findOne({
     "attachments.filename": name,
     $or: [
       { organizationId: { $in: scope.organizationIds } },
       { organizationId: null, workspace: { $in: scope.legacyWorkspaceIds } },
-      { organizationId: null },
     ],
-  });
+  }).populate({ path: "channel", populate: { path: "workspace" } });
+}
+
+const serve = asyncHandler(async (req, res) => {
+  const name = req.params.filename;
+  if (!ALLOWED.test(name)) throw new AppError("Invalid filename", 400);
+  const message = await findTenantMessageForFile(name, req.user._id);
   if (!message) throw new AppError("File not found", 404);
 
   const tenantMessage = await loadTenantResource(Message, message._id, req.user, { populate: { path: "channel", populate: { path: "workspace" } }, route: req.originalUrl });
@@ -42,4 +45,4 @@ const serve = asyncHandler(async (req, res) => {
   res.sendFile(filePath);
 });
 
-module.exports = { serve };
+module.exports = { serve, findTenantMessageForFile };
