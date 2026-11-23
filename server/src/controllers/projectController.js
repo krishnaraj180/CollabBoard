@@ -1138,6 +1138,7 @@ function notifyAssignees(io, { workspace, project, task, actor, ids, title, type
 
 const createTask = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("task:create", project, req.user);
   requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   requireTaskWorkStage(project, membership, req.user._id, organizationMembership);
@@ -1207,6 +1208,7 @@ const createTask = asyncHandler(async (req, res) => {
 
 const updateTask = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("task:update", project, req.user);
   requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   requireTaskWorkStage(project, membership, req.user._id, organizationMembership);
@@ -1335,6 +1337,7 @@ const updateTask = asyncHandler(async (req, res) => {
 
 const reorderTasks = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("task:move", project, req.user);
   requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   requireTaskWorkStage(project, membership, req.user._id, organizationMembership);
@@ -1684,6 +1687,7 @@ const removeTask = asyncHandler(async (req, res) => {
   const existing = await Task.findOne({ _id: req.params.taskId, project: project._id });
   if (!existing) throw new AppError("Task not found", 404);
   const isCreator = String(existing.createdBy) === String(req.user._id);
+  if (!isCreator && workspace.organizationId) await requirePermission("task:delete", project, req.user);
   if (!isCreator && !canManageAssignedProject(project, membership, req.user._id, organizationMembership)) {
     throw new AppError("Only the creator, assigned project manager, or workspace admin can delete this task", 403);
   }
@@ -1716,6 +1720,7 @@ const removeTask = asyncHandler(async (req, res) => {
 
 const addComment = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("task:comment", project, req.user);
   requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   assertObjectId(req.params.taskId, "task id");
@@ -1757,6 +1762,7 @@ const addComment = asyncHandler(async (req, res) => {
 
 const removeComment = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("task:comment", project, req.user);
   requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   assertObjectId(req.params.taskId, "task id");
@@ -1781,6 +1787,7 @@ const removeComment = asyncHandler(async (req, res) => {
 
 const updateComment = asyncHandler(async (req, res) => {
   const { project, workspace, membership, organizationMembership } = await loadProject(req);
+  if (workspace.organizationId) await requirePermission("task:comment", project, req.user);
   requireActiveProject(project);
   requireWritableMember(membership, organizationMembership);
   const task = await Task.findOne({ _id: req.params.taskId, project: project._id });
@@ -1953,6 +1960,8 @@ module.exports = {
   addComment,
   removeComment,
   updateComment,
+  assertAssigneesInWorkspace,
+  validateTaskDependencies,
   projectActivity,
   myTasks,
   dashboard,
