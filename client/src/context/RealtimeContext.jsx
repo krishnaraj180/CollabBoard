@@ -9,6 +9,7 @@ const RealtimeContext = createContext(null);
 
 export function RealtimeProvider({ children }) {
   const { user } = useAuth();
+  const userId = user?._id || user?.id;
   const [socket, setSocket] = useState(null);
   const [onlineUserIds, setOnlineUserIds] = useState([]);
   const [notifications, setNotifications] = useState([]);
@@ -34,18 +35,25 @@ export function RealtimeProvider({ children }) {
     const next = io(process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5000", {
       withCredentials: true,
     });
+    let sessionCheckRequested = false;
     setSocket(next);
     next.on("connect", () => {
       setSocketDown(false);
+      sessionCheckRequested = false;
       window.dispatchEvent(new Event("collabboard:realtime-connected"));
     });
     next.on("disconnect", () => setSocketDown(true));
     next.on("connect_error", (error) => {
       setSocketDown(true);
-      if (
-        ["Authentication required", "Invalid session", "Session has ended", "User no longer exists"]
-          .includes(error.message)
-      ) {
+      const isAuthError = [
+        "Authentication required",
+        "Invalid session",
+        "Session has ended",
+        "User no longer exists",
+      ].includes(error.message);
+
+      if (isAuthError && !sessionCheckRequested) {
+        sessionCheckRequested = true;
         window.dispatchEvent(new Event(SESSION_CHECK_EVENT));
       }
     });
@@ -66,7 +74,7 @@ export function RealtimeProvider({ children }) {
     });
     next.on("notification:new", (note) => setNotifications((n) => n.some((item) => String(item._id || item.id) === String(note._id || note.id)) ? n : [note, ...n].slice(0, 40)));
     return () => next.close();
-  }, [user]);
+  }, [userId]);
 
   const value = useMemo(
     () => ({
