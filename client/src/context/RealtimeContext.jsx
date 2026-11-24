@@ -34,6 +34,10 @@ export function RealtimeProvider({ children }) {
     }
     const next = io(process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5000", {
       withCredentials: true,
+      // Render can route the polling handshake and its upgrade request to
+      // different instances. Start with WebSocket directly so there is no
+      // Socket.IO polling session that can be lost during the upgrade.
+      transports: ["websocket"],
     });
     let sessionCheckRequested = false;
     setSocket(next);
