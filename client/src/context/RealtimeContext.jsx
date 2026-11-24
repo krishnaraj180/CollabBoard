@@ -44,6 +44,9 @@ export function RealtimeProvider({ children }) {
     let sessionCheckRequested = false;
     setSocket(next);
     next.on("connect", () => {
+      // A successful realtime connection proves the browser is online,
+      // even if navigator.onLine or a stale offline event says otherwise.
+      setOffline(false);
       setSocketDown(false);
       sessionCheckRequested = false;
       window.dispatchEvent(new Event("collabboard:realtime-connected"));
