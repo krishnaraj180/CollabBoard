@@ -1,12 +1,13 @@
 export const AUTH_EXPIRED_EVENT = "collabboard:auth-expired";
 export const SESSION_CHECK_EVENT = "collabboard:session-check";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 export async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (!(options.body instanceof FormData) && options.body && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
-  const res = await fetch(path, {
+  const res = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers,
     credentials: "include",

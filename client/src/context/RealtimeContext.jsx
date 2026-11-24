@@ -34,55 +34,76 @@ export function RealtimeProvider({ children }) {
       setSocket(null);
       return undefined;
     }
-    const next = io(process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5000", {
-      withCredentials: true,
-      // Render can route the polling handshake and its upgrade request to
-      // different instances. Start with WebSocket directly so there is no
-      // Socket.IO polling session that can be lost during the upgrade.
-      transports: ["websocket"],
-    });
-    let sessionCheckRequested = false;
-    setSocket(next);
-    next.on("connect", () => {
-      // A successful realtime connection proves the browser is online,
-      // even if navigator.onLine or a stale offline event says otherwise.
-      setOffline(false);
-      setSocketDown(false);
-      sessionCheckRequested = false;
-      window.dispatchEvent(new Event("collabboard:realtime-connected"));
-    });
-    next.on("disconnect", () => setSocketDown(true));
-    next.on("connect_error", (error) => {
-      setSocketDown(true);
-      const isAuthError = [
-        "Authentication required",
-        "Invalid session",
-        "Session has ended",
-        "User no longer exists",
-      ].includes(error.message);
 
-      if (isAuthError && !sessionCheckRequested) {
-        sessionCheckRequested = true;
-        window.dispatchEvent(new Event(SESSION_CHECK_EVENT));
+    let next = null;
+    let cancelled = false;
+
+    async function connectSocket() {
+      // Try to fetch socket auth token for cross-domain deployments (e.g. Vercel -> Render)
+      let token = null;
+      try {
+        const authData = await api("/api/auth/socket-token");
+        token = authData?.token || null;
+      } catch {
+        // Fall back to cookies if endpoint fails or local development
       }
-    });
-    next.on("auth:session-changed", () => {
-      window.dispatchEvent(new Event(SESSION_CHECK_EVENT));
-    });
-    next.on("auth:session-expired", () => {
-      window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
-    });
-    next.on("presence:snapshot", ({ onlineUserIds: ids }) => setOnlineUserIds(ids || []));
-    next.on("presence:update", ({ userId, online }) => {
-      setOnlineUserIds((current) => {
-        const set = new Set(current);
-        if (online) set.add(String(userId));
-        else set.delete(String(userId));
-        return [...set];
+
+      if (cancelled) return;
+
+      next = io(process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5000", {
+        withCredentials: true,
+        transports: ["websocket"],
+        auth: token ? { token } : undefined,
       });
-    });
-    next.on("notification:new", (note) => setNotifications((n) => n.some((item) => String(item._id || item.id) === String(note._id || note.id)) ? n : [note, ...n].slice(0, 40)));
-    return () => next.close();
+
+      let sessionCheckRequested = false;
+      setSocket(next);
+
+      next.on("connect", () => {
+        setOffline(false);
+        setSocketDown(false);
+        sessionCheckRequested = false;
+        window.dispatchEvent(new Event("collabboard:realtime-connected"));
+      });
+      next.on("disconnect", () => setSocketDown(true));
+      next.on("connect_error", (error) => {
+        setSocketDown(true);
+        const isAuthError = [
+          "Authentication required",
+          "Invalid session",
+          "Session has ended",
+          "User no longer exists",
+        ].includes(error.message);
+
+        if (isAuthError && !sessionCheckRequested) {
+          sessionCheckRequested = true;
+          window.dispatchEvent(new Event(SESSION_CHECK_EVENT));
+        }
+      });
+      next.on("auth:session-changed", () => {
+        window.dispatchEvent(new Event(SESSION_CHECK_EVENT));
+      });
+      next.on("auth:session-expired", () => {
+        window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+      });
+      next.on("presence:snapshot", ({ onlineUserIds: ids }) => setOnlineUserIds(ids || []));
+      next.on("presence:update", ({ userId, online }) => {
+        setOnlineUserIds((current) => {
+          const set = new Set(current);
+          if (online) set.add(String(userId));
+          else set.delete(String(userId));
+          return [...set];
+        });
+      });
+      next.on("notification:new", (note) => setNotifications((n) => n.some((item) => String(item._id || item.id) === String(note._id || note.id)) ? n : [note, ...n].slice(0, 40)));
+    }
+
+    connectSocket();
+
+    return () => {
+      cancelled = true;
+      if (next) next.close();
+    };
   }, [userId]);
 
   const value = useMemo(
@@ -91,7 +112,9 @@ export function RealtimeProvider({ children }) {
       onlineUserIds,
       notifications,
       setNotifications,
-      disconnected: offline || socketDown,
+      // A live socket is authoritative: some browsers can keep
+      // navigator.onLine=false while WebSockets are working normally.
+      disconnected: socketDown || (offline && !socket?.connected),
     }),
     [socket, onlineUserIds, notifications, offline, socketDown]
   );
