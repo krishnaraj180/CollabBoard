@@ -91,7 +91,9 @@ export function RealtimeProvider({ children }) {
       onlineUserIds,
       notifications,
       setNotifications,
-      disconnected: offline || socketDown,
+      // A live socket is authoritative: some browsers can keep
+      // navigator.onLine=false while WebSockets are working normally.
+      disconnected: socketDown || (offline && !socket?.connected),
     }),
     [socket, onlineUserIds, notifications, offline, socketDown]
   );
