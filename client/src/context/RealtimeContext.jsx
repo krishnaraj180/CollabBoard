@@ -13,7 +13,9 @@ export function RealtimeProvider({ children }) {
   const [socket, setSocket] = useState(null);
   const [onlineUserIds, setOnlineUserIds] = useState([]);
   const [notifications, setNotifications] = useState([]);
-  const [offline, setOffline] = useState(false);
+  // Initialize from the browser's current network state so a page opened
+  // while offline does not get a stale realtime status.
+  const [offline, setOffline] = useState(() => typeof window !== "undefined" && !window.navigator.onLine);
   const [socketDown, setSocketDown] = useState(false);
 
   useEffect(() => {
