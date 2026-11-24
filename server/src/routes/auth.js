@@ -21,6 +21,11 @@ router.post("/password/forgot", authLimit, validate(auth.resetRequestSchema), au
 router.post("/password/reset", authLimit, validate(auth.resetSchema), auth.resetPassword);
 router.post("/logout", auth.logout);
 router.post("/sessions/revoke", requireAuth, auth.revokeSessions);
+router.get("/socket-token", requireAuth, (req, res) => {
+  const { readToken } = require("../utils/tokens");
+  const token = readToken(req);
+  res.json({ token });
+});
 router.get("/me", requireAuth, auth.me);
 router.patch("/me", requireAuth, validate(auth.profileSchema), auth.updateMe);
 router.post("/email/verify", validate(auth.emailVerificationSchema), auth.verifyEmail);

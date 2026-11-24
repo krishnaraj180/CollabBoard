@@ -113,7 +113,10 @@ function attachSockets(io) {
   io.use(async (socket, next) => {
     try {
       const cookies = parseCookie(socket.handshake.headers.cookie);
-      const token = cookies[COOKIE];
+      const token =
+        socket.handshake.auth?.token ||
+        socket.handshake.query?.token ||
+        cookies[COOKIE];
       if (!token) return next(new Error("Authentication required"));
       const payload = jwt.verify(token, env.jwtSecret);
       const user = await User.findById(payload.sub);
