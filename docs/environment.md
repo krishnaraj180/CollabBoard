@@ -20,6 +20,8 @@ Copy the relevant example file to `.env` or `.env.local`. Never commit real valu
 | `SENTRY_ENVIRONMENT` | No | Sentry environment label. |
 | `TENANT_ENFORCEMENT` | No | `off`, `log`, or `on`. |
 | `TENANT_ENFORCEMENT_OVERRIDE` | No | Explicit emergency override for tenant startup checks. |
+| `REDIS_URL` | Required in production | Redis connection used by Socket.IO and BullMQ. |
+| `WORKER_CONCURRENCY` | No | BullMQ worker concurrency; defaults to `5`. |
 
 The API validates required values before connecting to MongoDB or listening on its port. In production, missing or invalid values terminate startup with a list of errors.
 

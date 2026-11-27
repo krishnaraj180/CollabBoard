@@ -46,6 +46,7 @@ const env = {
   isTest,
   tenantEnforcement,
   tenantEnforcementOverride: process.env.TENANT_ENFORCEMENT_OVERRIDE === "true",
+  redisUrl: process.env.REDIS_URL || "",
 };
 
 function validateStartupEnv() {
@@ -55,6 +56,7 @@ function validateStartupEnv() {
   if (!env.mongoUri) errors.push("MONGODB_URI is required");
   if (!env.jwtSecret) errors.push("JWT_SECRET is required");
   if (env.isProd && env.jwtSecret.length < 32) errors.push("JWT_SECRET must be at least 32 characters in production");
+  if (env.isProd && !env.redisUrl) errors.push("REDIS_URL is required in production");
   if (env.isProd && env.clientOrigins.some((origin) => !origin.startsWith("https://"))) errors.push("CLIENT_ORIGIN must use HTTPS in production");
   if (env.cookieSameSite === "none" && !env.isProd && env.clientOrigins.some((origin) => origin.startsWith("http://"))) errors.push("COOKIE_SAME_SITE=none with an HTTP client origin is unsafe");
   if (errors.length) throw new Error(`Environment validation failed:\n- ${errors.join("\n- ")}`);

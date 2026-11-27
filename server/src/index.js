@@ -7,6 +7,8 @@ const { attachSockets } = require("./sockets");
 const { assertTenantReady } = require("./services/tenantStartupCheck");
 const { initSentry } = require("./config/sentry");
 const { log } = require("./utils/logger");
+const { connectRedis, disconnectRedis } = require("./config/redis");
+const { createAdapter } = require("@socket.io/redis-adapter");
 
 initSentry();
 validateStartupEnv();
@@ -21,12 +23,16 @@ async function main() {
   }
   const app = createApp();
   const server = http.createServer(app);
+  const redis = await connectRedis();
   const io = new Server(server, {
     cors: { origin: env.clientOrigins, credentials: true },
     maxHttpBufferSize: 1e6,
     pingInterval: 25000,
     pingTimeout: 20000,
   });
+  if (redis) io.adapter(createAdapter(redis.pubClient, redis.subClient));
+  else if (env.isProd) throw new Error("Redis is required for the production Socket.IO adapter");
+  else log("warn", "redis.adapter.disabled", { organizationId: null });
   app.set("io", io);
   attachSockets(io);
 
@@ -40,6 +46,7 @@ async function main() {
     io.close();
     server.close(async () => {
       await disconnectDb();
+      await disconnectRedis();
       process.exit(0);
     });
     setTimeout(() => process.exit(1), 10000).unref();
