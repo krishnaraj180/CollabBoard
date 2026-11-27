@@ -14,6 +14,8 @@
     "migrate:tenant": "node src/scripts/migrateTenantFoundation.js",
     "indexes:tenant": "node src/scripts/buildTenantIndexes.js",
     "verify:tenant": "node src/scripts/verifyTenantConsistency.js",
+    "backup:mongodb": "node src/scripts/backupMongo.js",
+    "restore:mongodb:test": "node src/scripts/restoreMongo.js",
     "roles:seed": "node src/scripts/seedSystemRoles.js"
   },
   "dependencies": {
