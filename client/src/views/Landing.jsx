@@ -10,7 +10,7 @@ const FEATURES = [
   { title: "Roles that matter", text: "Owners, admins and members. Admins steer projects and people; members focus on the work." },
   { title: "Team chat & files", text: "Channels with typing indicators and file sharing, right next to the board." },
   { title: "Notifications & activity", text: "Get told when you're assigned, mentioned in a comment or a task is finished." },
-  { title: "Works on every screen", text: "Swipeable boards, touch-friendly controls and a light or dark theme." },
+  { title: "Works on every screen", text: "Swipeable boards and touch-friendly controls in a focused dark theme." },
 ];
 
 const STEPS = [

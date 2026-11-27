@@ -1,3 +1,5 @@
+const { WORKFLOW_PERMISSIONS } = require("./workflowPermissions");
+
 const PERMISSIONS = Object.freeze([
   "organization:read",
   "organization:update",
@@ -24,6 +26,7 @@ const PERMISSIONS = Object.freeze([
   "task:comment",
   "channel:create",
   "channel:message",
+  ...WORKFLOW_PERMISSIONS,
 ]);
 
 const PERMISSION_SET = new Set(PERMISSIONS);

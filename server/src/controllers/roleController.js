@@ -20,7 +20,6 @@ const roleCreateSchema = z.object({
   params: z.object({ id: z.string() }),
   body: secureBody(z.object({
     name: z.string().trim().min(2).max(80),
-    key: z.string().trim().min(2).max(80).regex(/^[a-z][a-z0-9_\-]*$/),
     permissions: permissionList,
   }).strict(), ["permissions"]),
 });
@@ -29,7 +28,6 @@ const roleUpdateSchema = z.object({
   params: z.object({ id: z.string(), roleId: z.string() }),
   body: secureBody(z.object({
     name: z.string().trim().min(2).max(80).optional(),
-    key: z.string().trim().min(2).max(80).regex(/^[a-z][a-z0-9_\-]*$/).optional(),
     permissions: permissionList.optional(),
   }).strict().refine((body) => Object.keys(body).length > 0, { message: "Provide at least one role change" }), ["permissions"]),
 });
@@ -56,6 +54,31 @@ async function actorFor(organization, user) {
   return requirePermission("org.manage_roles", organization, user);
 }
 
+function isOwner(req) {
+  return req.organizationMembership?.role === "organization_owner" ||
+    String(req.organization.ownerId || "") === String(req.user._id);
+}
+
+function assertManageRolesEscalation(req, permissions) {
+  if (permissions.includes("org.manage_roles") && !isOwner(req)) {
+    throw new AppError("Only an organization owner can grant org.manage_roles", 403);
+  }
+}
+
+function roleKeyForName(name) {
+  const base = name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "custom_role";
+  return `${base}_${new mongoose.Types.ObjectId().toString().slice(-8)}`;
+}
+
+function permissionDiff(previous, next) {
+  const oldSet = new Set(previous || []);
+  const newSet = new Set(next || []);
+  return {
+    added: [...newSet].filter((permission) => !oldSet.has(permission)),
+    removed: [...oldSet].filter((permission) => !newSet.has(permission)),
+  };
+}
+
 async function assertWithinActor(actorMembership, permissions) {
   const held = new Set(await permissionsForMembership(actorMembership));
   if (permissions.some((permission) => !held.has(permission))) {
@@ -79,7 +102,7 @@ async function refreshRoleMembers(io, organizationId, userIds) {
       await grantUser(io, organizationId, userId, rooms);
     }
   } catch (error) {
-    console.error(JSON.stringify({ event: "realtime.role_refresh_failed", organizationId: String(organizationId), error: error.message }));
+    console.error(JSON.stringify({ event: "realtime.role_refresh_failed", organizationId: String(organizationId), userCount: userIds.length, error: error.message }));
   }
 }
 
@@ -92,14 +115,15 @@ const list = asyncHandler(async (req, res) => {
 const create = asyncHandler(async (req, res) => {
   const actor = await actorFor(req.organization, req.user);
   await assertWithinActor(actor, req.body.permissions);
+  assertManageRolesEscalation(req, req.body.permissions);
   const role = await Role.create({
     organizationId: req.organization._id,
     name: req.body.name,
-    key: req.body.key,
+    key: roleKeyForName(req.body.name),
     permissions: req.body.permissions,
     isSystem: false,
   });
-  recordAdminEvent({ organizationId: req.organization._id, actorId: req.user._id, action: "role_created", role: role.key });
+  recordAdminEvent({ organizationId: req.organization._id, actorId: req.user._id, action: "role_created", roleId: role._id, permissionDiff: { added: role.permissions, removed: [] } });
   res.status(201).json({ role });
 });
 
@@ -108,14 +132,16 @@ const update = asyncHandler(async (req, res) => {
   const role = await findTenantRole(req.organization._id, req.params.roleId);
   if (role.isSystem) throw new AppError("System roles are read-only", 403);
   const affectedMembers = await OrganizationMembership.find({ organizationId: req.organization._id, roleId: role._id, status: "active" }).select("userId").lean();
+  const previousPermissions = [...role.permissions];
   const permissions = req.body.permissions === undefined ? role.permissions : req.body.permissions;
   await assertWithinActor(actor, role.permissions);
   await assertWithinActor(actor, permissions);
+  assertManageRolesEscalation(req, role.permissions);
+  assertManageRolesEscalation(req, permissions);
   if (req.body.name !== undefined) role.name = req.body.name;
-  if (req.body.key !== undefined) role.key = req.body.key;
   role.permissions = permissions;
   await role.save();
-  recordAdminEvent({ organizationId: req.organization._id, actorId: req.user._id, action: "role_updated", role: role.key });
+  recordAdminEvent({ organizationId: req.organization._id, actorId: req.user._id, action: "role_updated", roleId: role._id, permissionDiff: permissionDiff(previousPermissions, permissions) });
   await refreshRoleMembers(req.app.get("io"), req.organization._id, affectedMembers.map((member) => member.userId));
   res.json({ role });
 });
@@ -125,6 +151,7 @@ const remove = asyncHandler(async (req, res) => {
   const role = await findTenantRole(req.organization._id, req.params.roleId);
   if (role.isSystem) throw new AppError("System roles are read-only", 403);
   await assertWithinActor(actor, role.permissions);
+  assertManageRolesEscalation(req, role.permissions);
   const memberCount = await OrganizationMembership.countDocuments({ organizationId: req.organization._id, roleId: role._id, status: { $ne: "revoked" } });
   let replacement = null;
   let affectedReassigned = [];
@@ -149,7 +176,7 @@ const remove = asyncHandler(async (req, res) => {
     await req.organization.save();
   }
   await Role.deleteOne({ _id: role._id, organizationId: req.organization._id });
-  recordAdminEvent({ organizationId: req.organization._id, actorId: req.user._id, action: "role_deleted", role: role.key });
+  recordAdminEvent({ organizationId: req.organization._id, actorId: req.user._id, action: "role_deleted", roleId: role._id, permissionDiff: { added: [], removed: role.permissions } });
   if (replacement) await refreshRoleMembers(req.app.get("io"), req.organization._id, affectedReassigned);
   res.status(204).end();
 });
@@ -158,6 +185,7 @@ const assign = asyncHandler(async (req, res) => {
   const actor = await actorFor(req.organization, req.user);
   const role = await findTenantRole(req.organization._id, req.body.roleId);
   await assertWithinActor(actor, role.permissions);
+  assertManageRolesEscalation(req, role.permissions);
   assertObjectId(req.params.userId, "Member");
   const membership = await OrganizationMembership.findOne({ organizationId: req.organization._id, userId: req.params.userId, status: "active" });
   const embedded = req.organization.members.find((member) => String(member.user) === String(req.params.userId));
@@ -167,10 +195,8 @@ const assign = asyncHandler(async (req, res) => {
   await membership.save();
   embedded.role = legacyRoleForRole(role);
   await req.organization.save();
-  recordAdminEvent({ organizationId: req.organization._id, actorId: req.user._id, targetUserId: req.params.userId, action: "role_assigned", role: role.key });
-  const rooms = await roomsForOrganization(req.organization._id);
-  await revokeUser(req.app.get("io"), req.organization._id, req.params.userId, rooms);
-  await grantUser(req.app.get("io"), req.organization._id, req.params.userId, rooms);
+  recordAdminEvent({ organizationId: req.organization._id, actorId: req.user._id, targetUserId: req.params.userId, action: "role_assigned", roleId: role._id, permissionDiff: { added: role.permissions, removed: [] } });
+  await refreshRoleMembers(req.app.get("io"), req.organization._id, [req.params.userId]);
   res.json({ membership: { ...membership.toObject(), roleId: role._id, role: legacyRoleForRole(role) } });
 });
 

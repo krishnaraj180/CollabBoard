@@ -26,6 +26,7 @@ const { activeOrganizationsFor } = require("../services/tenantAccess");
 const { grantUser, revokeUser, roomsForWorkspace, roomsForOrganization } = require("../services/realtimeAccess");
 const { seedSystemRoles } = require("../services/roleService");
 const { recordAdminEvent } = require("../utils/adminEvents");
+const { log } = require("../utils/logger");
 
 const roles = Organization.ORGANIZATION_ROLES;
 const createSchema = z.object({
@@ -163,7 +164,16 @@ async function uniqueSlug(name) {
 }
 
 async function loadOrganization(id, user) {
-  return loadTenantResource(Organization, id, user, { route: "organizations" });
+  const organization = await loadTenantResource(Organization, id, user, { route: "organizations" });
+  if (user?.platformRole === "super_admin") {
+    log("warn", "super_admin.organization_access", {
+      requestId: null,
+      userId: String(user._id),
+      organizationId: String(organization._id),
+      route: "organizations",
+    });
+  }
+  return organization;
 }
 
 async function formatOrganization(organization) {

@@ -1,8 +1,21 @@
 # CollabBoard
 
-Real-time team collaboration: group chat, presence, file sharing, notifications, and kanban boards with project status tracking, task details, workload views and admin controls.
+CollabBoard is a real-time team collaboration and project operations platform for organizations that need one place to plan work, communicate, manage people, and move projects through controlled delivery stages. It combines workspace-based collaboration with organization management, role-based access, live kanban boards, team chat, file sharing, notifications, workload reporting, and executive project approvals.
 
 **Stack:** MongoDB, Express, Next.js (React), Node.js, Socket.IO, JWT.
+
+## Product overview
+
+CollabBoard supports the full project lifecycle:
+
+- **Organizations and workspaces:** create organizations, manage members and departments, configure locations, link workspaces, and keep organization permissions separate from workspace membership.
+- **People and access control:** assign scoped organization and workspace roles, reporting lines, project teams, department positions, and platform Super Admin access through an operator-controlled flow.
+- **Project operations:** create projects, define budgets and timelines, assign project managers and teams, track status and completion, and manage milestones, sprints, dependencies, labels, checklists, comments, and due dates.
+- **Controlled delivery workflow:** move proposals and projects through business approval, technical review, planning, design, development, code review, QA, deployment, launch, finance, delivery review, and final executive approval.
+- **Real-time collaboration:** use live kanban updates, presence, team chat, typing indicators, notifications, activity feeds, and authenticated file attachments without refreshing the page.
+- **Reporting and visibility:** review dashboards, personal tasks, project progress, team workload, overdue work, organization workload, and location-level project visibility.
+- **Account and security:** use HttpOnly JWT cookies, session management, password changes, logout-all controls, email verification flows, protected uploads, scoped authorization, and state-changing request protection.
+- **Responsive dark interface:** use the same fixed dark visual theme across the landing page, authentication screens, workspaces, project boards, chat, account settings, and mobile layouts.
 
 ## Architecture
 
@@ -17,11 +30,13 @@ Real-time team collaboration: group chat, presence, file sharing, notifications,
 - **Auth:** register/login issue a JWT only in an HttpOnly cookie. REST and Socket.IO authenticate from that cookie; the browser does not store a bearer token in local storage. “Remember me” gives the JWT and cookie a 30-day lifetime. When unchecked, the cookie is a browser-session cookie and the JWT lifetime is `JWT_EXPIRES_IN` (7 days by default). Changing a password preserves the current session policy; logout, password changes, password resets and session revocation invalidate prior JWTs. State-changing requests with a browser Origin are restricted to configured `CLIENT_ORIGIN` values.
 - **Permissions:** every workspace, project, task, channel, message, and file route checks membership and role on the server. Organization routes use separate organization membership and RBAC checks; organization roles do not bypass the requirement for workspace membership on project resources. Socket events do the same before joining a channel.
 - **Realtime:** the API writes to MongoDB first, then emits `task:updated`, `chat:message`, `presence:update`, and `notification:new`. A second browser does not need a refresh. Chat history is loaded from MongoDB after reconnect.
-- **Files:** multipart upload through the message route, stored under `server/uploads`, served only to authenticated users.
+- **Files:** multipart upload through the message route, stored under `server/uploads`, served only by the authenticated `/api/files/:filename` controller. New stored names are UUIDs with a safe MIME-derived extension; existing stored names are not renamed. File lookup is tenant-scoped through the message, channel, workspace, and organization chain, and unknown, foreign, revoked-member, and non-channel-member filenames return the same 404 response. Platform Super Admin file reads are the only cross-tenant exception and emit a structured audit event.
+- **Chat access:** channel listings and message history remain membership-scoped for ordinary users. Super Admin cross-tenant chat reads are explicitly allowed, read-only, and logged. Socket.IO uses the same configured `CLIENT_ORIGIN` allowlist as REST; uploaded files are not exposed through static middleware.
+- **MongoDB recovery:** the scheduled `MongoDB backup` workflow runs `mongodump --archive --gzip` without Docker and retains the encrypted GitHub artifact for 30 days. Restore only into a separate database with `BACKUP_ARCHIVE`, `RESTORE_MONGODB_URI`, and `RESTORE_CONFIRM=collabboard-restore`, then run the seeded verification and application smoke tests against that restored database.
 
 ## Version 3 highlights
 
-- **New look:** off-white surfaces with a blue accent, Inter typography, light/dark themes, refined cards, badges and forms.
+- **New look:** fixed dark surfaces with violet and cyan accents, Inter typography, refined cards, badges and forms.
 - **Sidebar that never goes blank:** workspace switcher, Dashboard / My tasks / Team, every project (with status dot and live % complete) and every channel stay visible on every page, update live over Socket.IO, and remember your last workspace.
 - **Public landing page** at `/`, redesigned sign-in and register pages (password show/hide, strength meter), 404 and error pages.
 - **Account page** (`/app/account`): change display name and avatar colour, change password (signs out other devices).
@@ -75,7 +90,7 @@ Existing data is preserved: organizations and invitations use separate collectio
 - Every meaningful action is written to an activity log and pushed live (`activity:new`).
 
 **Responsive + accessible UI**
-- Mobile drawer navigation, swipeable kanban columns with a "Move to" control on every card (touch devices cannot drag), full-screen task sheet on phones, light/dark theme toggle, keyboard focus styles and reduced-motion support.
+- Mobile drawer navigation, swipeable kanban columns with a "Move to" control on every card (touch devices cannot drag), full-screen task sheet on phones, one consistent dark theme, keyboard focus styles and reduced-motion support.
 - Signed-out visitors are redirected to the login page.
 
 ### Roles
@@ -244,7 +259,6 @@ Screenshots: drop PNGs into `docs/screenshots/` (`login.png`, `board.png`, `chat
 ## Release checklist
 
 See the original 9 items. Automated coverage lives in `server/tests`. Remaining manual items: live hosted demo URL and screenshot files.
-
 
 ## Next.js migration notes
 

@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 const { ORGANIZATION_ROLES } = require("./Organization");
 
 const MEMBERSHIP_STATUSES = ["active", "suspended", "revoked"];
-const MEMBERSHIP_ROLES = [...new Set([...ORGANIZATION_ROLES, "organization_owner"])];
+const MEMBERSHIP_ROLES = [...new Set([...ORGANIZATION_ROLES, "organization_owner", "member"])];
 
 const organizationMembershipSchema = new mongoose.Schema(
   {

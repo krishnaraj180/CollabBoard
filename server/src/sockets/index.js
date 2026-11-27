@@ -43,6 +43,7 @@ async function workspaceCanJoin(workspace, userId, platformRole) {
 }
 
 async function canJoinResource(resource, scope, user) {
+  if (user.platformRole === "super_admin") return true;
   if (scope === "workspace") return Boolean(await workspaceCanJoin(resource, user._id, user.platformRole));
   if (scope === "channel") {
     const workspace = resource.workspace?._id ? resource.workspace : await Workspace.findById(resource.workspace);
@@ -182,7 +183,10 @@ function attachSockets(io) {
     await user.save();
     if (!socket.connected) return;
 
-    const workspaces = await Workspace.find({ "members.user": userId }).select("_id organizationId members");
+    const workspaces = await Workspace.find(user.platformRole === "super_admin" ? {} : { "members.user": userId }).select("_id organizationId members");
+    if (user.platformRole === "super_admin") {
+      console.warn(JSON.stringify({ event: "super_admin.realtime_access", userId: String(userId), resourceType: "chat", resourceCount: workspaces.length, timestamp: new Date().toISOString() }));
+    }
     if (!socket.connected) return;
     const capState = { count: 0 };
     for (const workspace of workspaces) {
@@ -194,7 +198,7 @@ function attachSockets(io) {
     }
 
     const workspaceIds = workspaces.map((ws) => ws._id);
-    const channels = await Channel.find({
+    const channels = await Channel.find(user.platformRole === "super_admin" ? { workspace: { $in: workspaceIds } } : {
       members: userId,
       workspace: { $in: workspaceIds },
     }).select("_id workspace");

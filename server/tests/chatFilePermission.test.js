@@ -17,7 +17,7 @@ test("custom channel permissions allow only the requested action", async () => {
   const userId = new mongoose.Types.ObjectId();
   const organizationId = new mongoose.Types.ObjectId();
   const role = await Role.create({ organizationId, name: "Chat Member", key: "chat_member", permissions: ["channel:message"] });
-  await OrganizationMembership.create({ organizationId, userId, role: "member", roleId: role._id, status: "active" });
+  await OrganizationMembership.create({ organizationId, userId, role: "organization_admin", roleId: role._id, status: "active" });
   const workspace = await Workspace.create({ organizationId, name: "Chat workspace", members: [{ user: userId, role: "member" }] });
   const channel = await Channel.create({ organizationId, workspace: workspace._id, name: "Private", members: [userId], createdBy: userId });
   await channel.populate("workspace");
@@ -43,8 +43,8 @@ test("file lookup is tenant-filtered and foreign attachments look nonexistent", 
     { _id: orgB, name: "Org B", createdBy: userB, ownerId: userB, members: [{ user: userB, role: "organization_admin" }] },
   ]);
   await OrganizationMembership.create([
-    { organizationId: orgA, userId: userA, role: "member", status: "active" },
-    { organizationId: orgB, userId: userB, role: "member", status: "active" },
+    { organizationId: orgA, userId: userA, role: "organization_admin", status: "active" },
+    { organizationId: orgB, userId: userB, role: "organization_admin", status: "active" },
   ]);
   const workspaceA = await Workspace.create({ organizationId: orgA, name: "A", members: [{ user: userA, role: "member" }] });
   const workspaceB = await Workspace.create({ organizationId: orgB, name: "B", members: [{ user: userB, role: "member" }] });
@@ -64,8 +64,8 @@ test("a user in two organizations gets independent channel permissions", async (
   const roleA = await Role.create({ organizationId: orgA, name: "Messenger", key: "messenger", permissions: ["channel:message"] });
   const roleB = await Role.create({ organizationId: orgB, name: "Reader", key: "reader", permissions: ["organization:read"] });
   await OrganizationMembership.create([
-    { organizationId: orgA, userId, role: "member", roleId: roleA._id, status: "active" },
-    { organizationId: orgB, userId, role: "member", roleId: roleB._id, status: "active" },
+    { organizationId: orgA, userId, role: "organization_admin", roleId: roleA._id, status: "active" },
+    { organizationId: orgB, userId, role: "organization_admin", roleId: roleB._id, status: "active" },
   ]);
   const workspaceA = await Workspace.create({ organizationId: orgA, name: "A", members: [{ user: userId, role: "member" }] });
   const workspaceB = await Workspace.create({ organizationId: orgB, name: "B", members: [{ user: userId, role: "member" }] });
