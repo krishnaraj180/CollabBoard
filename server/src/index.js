@@ -6,6 +6,7 @@ const { createApp } = require("./app");
 const { attachSockets } = require("./sockets");
 const { assertTenantReady } = require("./services/tenantStartupCheck");
 const { initSentry } = require("./config/sentry");
+const { log } = require("./utils/logger");
 
 initSentry();
 
@@ -29,12 +30,12 @@ async function main() {
   attachSockets(io);
 
   server.listen(env.port, () => {
-    console.log(`CollabBoard API on http://localhost:${env.port}`);
+    log("info", "server.started", { port: env.port, environment: env.nodeEnv, organizationId: null });
   });
 
   // Let in-flight requests finish when the host stops the container.
   const shutdown = (signal) => {
-    console.log(`${signal} received, shutting down`);
+    log("info", "server.shutdown", { signal, organizationId: null });
     io.close();
     server.close(async () => {
       await disconnectDb();
