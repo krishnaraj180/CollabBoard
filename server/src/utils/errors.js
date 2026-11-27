@@ -1,5 +1,6 @@
 const fs = require("fs");
 const { TenantAccessError } = require("./tenantErrors");
+const { captureException } = require("../config/sentry");
 
 class AppError extends Error {
   constructor(message, status = 400, details) {
@@ -11,6 +12,8 @@ class AppError extends Error {
 
 function errorHandler(err, req, res, next) {
   if (res.headersSent) return next(err);
+
+  if ((err.status || 500) >= 500) captureException(err, { method: req.method, path: req.path, requestId: req.id });
 
   if (!req.uploadsPersisted) {
     const uploadedPaths = new Set([

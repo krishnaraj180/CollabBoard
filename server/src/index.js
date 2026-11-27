@@ -5,6 +5,9 @@ const { connectDb, disconnectDb } = require("./config/db");
 const { createApp } = require("./app");
 const { attachSockets } = require("./sockets");
 const { assertTenantReady } = require("./services/tenantStartupCheck");
+const { initSentry } = require("./config/sentry");
+
+initSentry();
 
 async function main() {
   await connectDb();
