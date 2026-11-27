@@ -28,8 +28,7 @@ function newCollectionResult() {
   };
 }
 
-async function main() {
-  await connectDb();
+async function buildReport() {
   const report = {
     collections: {
       Channel: newCollectionResult(),
@@ -94,16 +93,29 @@ async function main() {
     else compare(report.collections.Notification, id(notification.organizationId), parent);
   }
 
-  console.log(JSON.stringify(report, null, 2));
-  const mismatches = Object.values(report.collections).some((collection) =>
-    collection.bothSetDifferent > 0 || collection.childSetParentNull > 0 || collection.brokenParent > 0 || collection.parentUnknown > 0
-  );
-  if (mismatches) process.exitCode = 1;
+  return report;
 }
 
-main()
-  .catch((error) => {
+function hasMismatches(report) {
+  return Object.values(report.collections).some((collection) =>
+    collection.bothSetDifferent > 0 || collection.childSetParentNull > 0 || collection.brokenParent > 0 || collection.parentUnknown > 0
+  );
+}
+
+async function main() {
+  try {
+    await connectDb();
+    const report = await buildReport();
+    console.log(JSON.stringify(report, null, 2));
+    if (hasMismatches(report)) process.exitCode = 1;
+  } catch (error) {
     console.error("Tenant consistency check failed:", error.message);
     process.exitCode = 1;
-  })
-  .finally(disconnectDb);
+  } finally {
+    await disconnectDb();
+  }
+}
+
+if (require.main === module) main();
+
+module.exports = { buildReport, hasMismatches };

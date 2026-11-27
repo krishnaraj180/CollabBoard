@@ -9,6 +9,7 @@
     "test": "jest --detectOpenHandles",
     "test:ci": "jest --ci --detectOpenHandles --runInBand",
     "test:tenant-modes": "node tests/runTenantModes.js",
+    "verify:tenant:seeded": "node src/scripts/verifyTenantConsistencySeeded.js",
     "grant-super-admin": "node src/scripts/grantSuperAdmin.js",
     "migrate:tenant": "node src/scripts/migrateTenantFoundation.js",
     "indexes:tenant": "node src/scripts/buildTenantIndexes.js",
