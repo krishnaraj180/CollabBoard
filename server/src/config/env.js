@@ -48,4 +48,16 @@ const env = {
   tenantEnforcementOverride: process.env.TENANT_ENFORCEMENT_OVERRIDE === "true",
 };
 
-module.exports = { env };
+function validateStartupEnv() {
+  const errors = [];
+  if (!Number.isInteger(env.port) || env.port < 1 || env.port > 65535) errors.push("PORT must be an integer between 1 and 65535");
+  if (!env.clientOrigins.length) errors.push("CLIENT_ORIGIN must contain at least one origin");
+  if (!env.mongoUri) errors.push("MONGODB_URI is required");
+  if (!env.jwtSecret) errors.push("JWT_SECRET is required");
+  if (env.isProd && env.jwtSecret.length < 32) errors.push("JWT_SECRET must be at least 32 characters in production");
+  if (env.isProd && env.clientOrigins.some((origin) => !origin.startsWith("https://"))) errors.push("CLIENT_ORIGIN must use HTTPS in production");
+  if (env.cookieSameSite === "none" && !env.isProd && env.clientOrigins.some((origin) => origin.startsWith("http://"))) errors.push("COOKIE_SAME_SITE=none with an HTTP client origin is unsafe");
+  if (errors.length) throw new Error(`Environment validation failed:\n- ${errors.join("\n- ")}`);
+}
+
+module.exports = { env, validateStartupEnv };

@@ -1,6 +1,6 @@
 const http = require("http");
 const { Server } = require("socket.io");
-const { env } = require("./config/env");
+const { env, validateStartupEnv } = require("./config/env");
 const { connectDb, disconnectDb } = require("./config/db");
 const { createApp } = require("./app");
 const { attachSockets } = require("./sockets");
@@ -9,6 +9,7 @@ const { initSentry } = require("./config/sentry");
 const { log } = require("./utils/logger");
 
 initSentry();
+validateStartupEnv();
 
 async function main() {
   await connectDb();
