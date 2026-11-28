@@ -18,4 +18,14 @@ async function disconnectDb() {
   await mongoose.disconnect();
 }
 
-module.exports = { connectDb, disconnectDb };
+async function isDbReady() {
+  if (mongoose.connection.readyState !== 1) return false;
+  try {
+    await mongoose.connection.db.command({ ping: 1 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+module.exports = { connectDb, disconnectDb, isDbReady };

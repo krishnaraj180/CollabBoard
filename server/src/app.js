@@ -7,6 +7,8 @@ const { env } = require("./config/env");
 const { errorHandler, AppError } = require("./utils/errors");
 const { requireAuth } = require("./middleware/auth");
 const { validateOrigin } = require("./middleware/validateOrigin");
+const { isDbReady } = require("./config/db");
+const { requestLogger } = require("./utils/logger");
 const authRoutes = require("./routes/auth");
 const workspaceRoutes = require("./routes/workspaces");
 const organizationRoutes = require("./routes/organizations");
@@ -19,6 +21,7 @@ function createApp() {
   const app = express();
   app.set("trust proxy", 1);
   app.set("etag", false);
+  app.use(requestLogger);
   app.use((req, res, next) => {
     res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
     next();
@@ -38,12 +41,17 @@ function createApp() {
     max: env.isTest ? 10000 : 600,
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => req.path === "/health",
+    skip: (req) => ["/health", "/ready"].includes(req.path),
     message: { error: "Too many requests, try again later" },
   }));
 
   app.get("/api/health", (req, res) => {
     res.json({ ok: true, service: "collabboard" });
+  });
+  app.get("/api/ready", async (req, res) => {
+    const database = await isDbReady();
+    const ready = database;
+    res.status(ready ? 200 : 503).json({ ok: ready, service: "collabboard", checks: { database } });
   });
 
   app.use("/api/auth", authRoutes);

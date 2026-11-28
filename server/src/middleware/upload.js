@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const multer = require("multer");
 const { env } = require("../config/env");
 const { AppError } = require("../utils/errors");
@@ -28,7 +29,8 @@ const safeExtensions = {
 const storage = multer.diskStorage({
   destination: dest,
   filename: (req, file, cb) => {
-    const safe = `${Date.now()}-${Math.round(Math.random() * 1e9)}${safeExtensions[file.mimetype] || ".bin"}`;
+    // New uploads use opaque UUID names. Existing files keep their stored names.
+    const safe = `${crypto.randomUUID()}${safeExtensions[file.mimetype] || ".bin"}`;
     req.uploadedFilePaths ||= [];
     req.uploadedFilePaths.push(path.join(dest, safe));
     cb(null, safe);

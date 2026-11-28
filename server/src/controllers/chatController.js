@@ -32,16 +32,16 @@ const messageReadSchema = z.object({
   params: z.object({ channelId: z.string(), messageId: z.string() }),
 });
 
-async function loadWorkspace(id, userId) {
-  const workspace = await loadTenantResource(Workspace, id?._id || id, { _id: userId }, { route: "chat.workspace" });
+async function loadWorkspace(id, userId, { allowSuperAdmin = false } = {}) {
+  const workspace = await loadTenantResource(Workspace, id?._id || id, { _id: userId, platformRole: allowSuperAdmin ? "super_admin" : null }, { route: "chat.workspace" });
   if (workspace.organizationId) {
     const organization = await Organization.findById(workspace.organizationId).select("status members");
-    if (!organization || organization.status !== "active" || !await organizationMemberOf(organization, userId)) {
+    if (!allowSuperAdmin && (!organization || organization.status !== "active" || !await organizationMemberOf(organization, userId))) {
       throw new AppError("You do not have access to this organization workspace", 403);
     }
   }
-  const membership = requireMember(workspace, userId);
-  return { workspace, membership };
+  if (!allowSuperAdmin) return { workspace, membership: requireMember(workspace, userId) };
+  return { workspace, membership: null };
 }
 
 function requireWritableMember(membership) {
@@ -57,8 +57,9 @@ function assertChannelMember(channel, userId) {
 }
 
 const listChannels = asyncHandler(async (req, res) => {
-  await loadWorkspace(req.params.workspaceId, req.user._id);
-  const channels = await Channel.find({
+  const isSuperAdmin = req.user.platformRole === "super_admin";
+  await loadWorkspace(req.params.workspaceId, req.user._id, { allowSuperAdmin: isSuperAdmin });
+  const channels = await Channel.find(isSuperAdmin ? { workspace: req.params.workspaceId } : {
     workspace: req.params.workspaceId,
     members: req.user._id,
   })
@@ -95,8 +96,10 @@ const createChannel = asyncHandler(async (req, res) => {
 
 const listMessages = asyncHandler(async (req, res) => {
   const channel = await loadTenantResource(Channel, req.params.channelId, req.user, { populate: "workspace", route: req.originalUrl });
-  await loadWorkspace(channel.workspace, req.user._id);
-  assertChannelMember(channel, req.user._id);
+  const isSuperAdmin = req.user.platformRole === "super_admin";
+  await loadWorkspace(channel.workspace, req.user._id, { allowSuperAdmin: isSuperAdmin });
+  if (!isSuperAdmin) assertChannelMember(channel, req.user._id);
+  if (isSuperAdmin) console.warn(JSON.stringify({ event: "super_admin.chat_read", userId: String(req.user._id), organizationId: channel.organizationId ? String(channel.organizationId) : null, workspaceId: String(channel.workspace._id || channel.workspace), channelId: String(channel._id), timestamp: new Date().toISOString() }));
   const limit = Math.min(Number(req.query.limit || 50), 100);
   const before = req.query.before;
   const filter = { channel: channel._id };

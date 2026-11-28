@@ -20,6 +20,14 @@ const { secureBody } = require("../utils/inputSecurity");
 const { loadTenantResource } = require("../services/tenantAccess");
 const { listScope } = require("../services/tenantAccess");
 const { grantUser, roomsForWorkspace } = require("../services/realtimeAccess");
+const { tenantNotFound } = require("../utils/tenantErrors");
+const {
+  WORKFLOW_TRANSITIONS,
+  TASK_STAGE_ROLES,
+  hasWorkflowPermission,
+  legacyWorkflowRoleAllowed,
+} = require("../config/workflowPermissions");
+const { log } = require("../utils/logger");
 
 /* ------------------------------------------------------------------ */
 /* Validation                                                          */
@@ -282,7 +290,22 @@ async function loadWorkspace(id, userId, platformRole = null) {
 /** Loads project + workspace and the caller's membership in one go. */
 async function loadProject(req) {
   const project = await loadTenantResource(Project, req.params.id, req.user, { populate: "workspace", route: req.originalUrl });
+  if (project.workspace?.organizationId && req.user.platformRole !== "super_admin") {
+    const organization = await Organization.findById(project.workspace.organizationId).select("status");
+    const organizationMembership = organization ? await organizationMemberOf(organization, req.user._id) : null;
+    if (!organizationMembership) throw tenantNotFound();
+  }
   const { workspace, membership, organization, organizationMembership } = await loadWorkspace(project.workspace?._id || project.workspace, req.user._id, req.user.platformRole);
+  if (req.user.platformRole === "super_admin") {
+    log("warn", "super_admin.workflow_access", {
+      requestId: req.id || null,
+      userId: String(req.user._id),
+      organizationId: workspace.organizationId ? String(workspace.organizationId) : null,
+      workspaceId: String(workspace._id),
+      projectId: String(project._id),
+      route: req.originalUrl,
+    });
+  }
   project._tenantWorkspace = workspace;
   if (!canAccessProject(project, membership, req.user._id) &&
       !canAccessOrganizationProject(project, organizationMembership, req.user._id, req.user.platformRole)) {
@@ -382,34 +405,6 @@ function requireWritableMember(membership, organizationMembership = null) {
   }
 }
 
-const TASK_STAGE_ROLES = {
-  design: ["design_manager", "design_team_lead", "ui_ux_designer"],
-  development: [
-    "engineering_manager",
-    "team_lead",
-    "development_team_lead",
-    "frontend_developer",
-    "react_developer",
-    "ui_developer",
-    "backend_developer",
-    "nodejs_developer",
-    "java_developer",
-    "python_developer",
-  ],
-  bug_fixing: [
-    "engineering_manager",
-    "team_lead",
-    "development_team_lead",
-    "frontend_developer",
-    "react_developer",
-    "ui_developer",
-    "backend_developer",
-    "nodejs_developer",
-    "java_developer",
-    "python_developer",
-  ],
-};
-
 function isAssignedToDepartments(project, userId, departments) {
   const expected = new Set(departments.map((department) => department.toLowerCase()));
   return project.departmentAssignments.some((assignment) =>
@@ -467,24 +462,6 @@ function canEditProjectTasks(project, membership, userId, organizationMembership
   }
 }
 
-const WORKFLOW_TRANSITIONS = {
-  business_approval: { action: "approve", next: "technical_review", roles: ["managing_director"] },
-  technical_review: { action: "approve", next: "project_setup", roles: ["cto"] },
-  project_setup: { action: "submit", next: "team_assignment", roles: ["project_manager"] },
-  team_assignment: { action: "submit", next: "design", roles: ["project_manager"] },
-  design: { action: "complete", next: "development", departments: ["Design Department"], roles: ["design_manager", "design_team_lead", "ui_ux_designer"] },
-  development: { action: "complete", next: "code_review", departments: ["Development Department", "Frontend Team", "Backend Team"], roles: ["engineering_manager", "team_lead", "development_team_lead", "frontend_developer", "react_developer", "ui_developer", "backend_developer", "nodejs_developer", "java_developer", "python_developer"] },
-  code_review: { action: "approve", next: "qa_testing", departments: ["Development Department"], roles: ["engineering_manager", "team_lead", "development_team_lead"] },
-  qa_testing: { action: "pass", next: "deployment", departments: ["QA Department"], roles: ["qa_manager", "qa_team_lead", "qa_engineer"] },
-  bug_fixing: { action: "complete", next: "code_review", departments: ["Development Department", "Frontend Team", "Backend Team"], roles: ["engineering_manager", "team_lead", "development_team_lead", "frontend_developer", "react_developer", "ui_developer", "backend_developer", "nodejs_developer", "java_developer", "python_developer"] },
-  deployment: { action: "deploy", next: "production_release", departments: ["DevOps Department"], roles: ["devops_manager", "devops_team_lead", "devops_engineer"] },
-  production_release: { action: "release", next: "marketing_launch", departments: ["DevOps Department"], roles: ["devops_manager", "devops_team_lead", "devops_engineer"] },
-  marketing_launch: { action: "launch", next: "finance_review", departments: ["Marketing Department"], roles: ["marketing_manager", "marketing_team_lead", "marketing_executive", "marketing"] },
-  finance_review: { action: "complete", next: "delivery_review", departments: ["Finance Department"], roles: ["finance_manager", "accountant", "finance_executive", "finance"] },
-  delivery_review: { action: "complete", next: "executive_review", roles: ["project_manager"] },
-  executive_review: { action: "complete", next: "completed", roles: ["ceo", "managing_director"] },
-};
-
 const workflowLabels = {
   business_approval: "MD business approval",
   technical_review: "CTO technical review",
@@ -504,18 +481,20 @@ const workflowLabels = {
   completed: "Project completed",
 };
 
-function assertWorkflowRole(membership, allowedRoles, project, userId, departments = [], organizationMembership = null) {
+function assertWorkflowRole(membership, allowedRoles, project, userId, departments = [], organizationMembership = null, action = null) {
   if (membership.companyWideAccess) {
     throw new AppError("Company-wide CEO access is read-only for location projects", 403);
   }
   const organizationAllowed = project.workflowStage === "project_setup" || project.workflowStage === "team_assignment"
     ? organizationMembership?.role === "project_manager"
     : organizationRoleCanWork(project, organizationMembership, userId);
-  if (!allowedRoles.includes(membership.role) && membership.role !== "owner" && !organizationAllowed) {
-    throw new AppError(`This workflow step requires: ${allowedRoles.join(" or ")}`, 403);
-  }
+  const permissionAllowed = hasWorkflowPermission(membership.role, project.workflowStage, action);
+  const legacyAllowed = legacyWorkflowRoleAllowed(membership.role, project.workflowStage, action);
   if (membership.role !== "owner" && !organizationAllowed && departments.length && !isAssignedToDepartments(project, userId, departments)) {
     throw new AppError("You are not assigned to the department responsible for this workflow step", 403);
+  }
+  if (!permissionAllowed && !legacyAllowed && membership.role !== "owner" && !organizationAllowed) {
+    throw new AppError(`This workflow step requires: ${allowedRoles.join(" or ")}`, 403);
   }
 }
 
@@ -532,7 +511,7 @@ const transitionWorkflow = asyncHandler(async (req, res) => {
   if (!transition || !stageActions.includes(req.body.action)) {
     throw new AppError(`Action is not valid during ${workflowLabels[project.workflowStage] || project.workflowStage}`, 409);
   }
-  assertWorkflowRole(membership, transition.roles, project, req.user._id, transition.departments, organizationMembership);
+  assertWorkflowRole(membership, transition.roles, project, req.user._id, transition.departments, organizationMembership, req.body.action);
 
   if (project.workflowStage === "project_setup") {
     if (!project.scope.trim() || project.budget === null || !project.dueDate || !project.milestones.length) {

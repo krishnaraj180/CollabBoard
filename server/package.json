@@ -9,13 +9,20 @@
     "test": "jest --detectOpenHandles",
     "test:ci": "jest --ci --detectOpenHandles --runInBand",
     "test:tenant-modes": "node tests/runTenantModes.js",
+    "worker": "node src/worker.js",
+    "verify:tenant:seeded": "node src/scripts/verifyTenantConsistencySeeded.js",
     "grant-super-admin": "node src/scripts/grantSuperAdmin.js",
     "migrate:tenant": "node src/scripts/migrateTenantFoundation.js",
     "indexes:tenant": "node src/scripts/buildTenantIndexes.js",
     "verify:tenant": "node src/scripts/verifyTenantConsistency.js",
+    "backup:mongodb": "node src/scripts/backupMongo.js",
+    "restore:mongodb:test": "node src/scripts/restoreMongo.js",
     "roles:seed": "node src/scripts/seedSystemRoles.js"
   },
   "dependencies": {
+    "@sentry/node": "^9.18.0",
+    "@socket.io/redis-adapter": "^8.3.0",
+    "bullmq": "^5.63.0",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
@@ -27,6 +34,7 @@
     "mongoose": "^8.9.5",
     "multer": "^1.4.5-lts.1",
     "socket.io": "^4.8.1",
+    "redis": "^5.8.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {

@@ -1,17 +1,17 @@
 /* ==========================================================================
-   CollabBoard design system — off-white surfaces, blue accent
+   CollabBoard design system — dark surfaces, blue accent
    ========================================================================== */
 
 :root {
-  --paper: #f6f7fb;          /* page background (cool off-white) */
-  --card: #ffffff;
-  --surface: #ffffff;
-  --sidebar: #fbfcfe;
-  --ink: #0f1b36;
-  --muted: #5b6985;
-  --line: #e2e7f1;
-  --chip: #eef1f8;
-  --input: #ffffff;
+  --paper: #0b1220;
+  --card: #121b2e;
+  --surface: #17223a;
+  --sidebar: #0e1626;
+  --ink: #e8eefc;
+  --muted: #9aa9c6;
+  --line: #243350;
+  --chip: #1b2842;
+  --input: #17223a;
 
   --accent: #2563eb;
   --accent-dark: #1d4ed8;
@@ -36,7 +36,7 @@
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--ink);
   background: var(--paper);
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 :root[data-theme="dark"] {
@@ -429,6 +429,122 @@ textarea { resize: vertical; width: 100%; }
 .comments { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 14px; }
 .comments li { display: flex; gap: 10px; }
 .comment-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+
+/* ---------- CollabBoard dark product skin ----------
+   Dark-first surfaces and high-contrast violet/cyan accents inspired by the
+   product reference. Components above keep their existing behavior; these
+   tokens intentionally make the visual language consistent across views. */
+:root[data-theme="dark"] {
+  --paper: #070d1d;
+  --card: #0d1629;
+  --surface: #111c32;
+  --sidebar: #091226;
+  --ink: #f5f7ff;
+  --muted: #9ba9c8;
+  --line: #263451;
+  --chip: #17233c;
+  --input: #111c32;
+  --accent: #8b5cf6;
+  --accent-dark: #7c3aed;
+  --accent-soft: #24184e;
+  --accent-ink: #c4b5fd;
+  --good: #2dd4bf;
+  --good-soft: #0c3538;
+  --warn: #fbbf24;
+  --warn-soft: #3b2e0e;
+  --danger: #fb7185;
+  --danger-soft: #431b2a;
+  --info: #22d3ee;
+  --info-soft: #103844;
+  --shadow-sm: 0 10px 30px rgba(0, 0, 0, .18);
+  --shadow: 0 22px 70px rgba(0, 0, 0, .42);
+}
+
+:root[data-theme="dark"] body {
+  background: radial-gradient(circle at 78% -12%, rgba(92, 55, 190, .16), transparent 30rem), var(--paper);
+}
+:root[data-theme="dark"] .app { background: transparent; }
+:root[data-theme="dark"] .sidebar {
+  background: linear-gradient(180deg, rgba(9, 18, 38, .98), rgba(11, 18, 39, .96));
+  border-right-color: rgba(103, 124, 176, .24);
+}
+:root[data-theme="dark"] .brand { padding: 8px 10px 14px; }
+:root[data-theme="dark"] .logo-text { font-size: 20px; }
+:root[data-theme="dark"] .logo-text::first-letter { color: #fff; }
+:root[data-theme="dark"] .logo-text { color: #f8faff; }
+:root[data-theme="dark"] .logo-text { text-shadow: 0 0 22px rgba(139, 92, 246, .24); }
+:root[data-theme="dark"] .nav-link { color: #d9e2f7; padding: 11px 12px; }
+:root[data-theme="dark"] .nav-link:hover { background: rgba(139, 92, 246, .12); }
+:root[data-theme="dark"] .nav-link.active {
+  color: #fff;
+  background: linear-gradient(100deg, #6d35d8, #8b5cf6);
+  border-color: transparent;
+  box-shadow: 0 10px 24px rgba(124, 58, 237, .26);
+}
+:root[data-theme="dark"] .nav-link.active .nav-icon { color: #fff; }
+:root[data-theme="dark"] .appbar {
+  background: rgba(7, 13, 29, .74);
+  border-bottom-color: rgba(103, 124, 176, .18);
+}
+:root[data-theme="dark"] .main { max-width: 1560px; padding-top: 28px; }
+:root[data-theme="dark"] .box,
+:root[data-theme="dark"] .card,
+:root[data-theme="dark"] .stat-card,
+:root[data-theme="dark"] .filters,
+:root[data-theme="dark"] .panel-form {
+  background: linear-gradient(145deg, rgba(17, 28, 50, .94), rgba(11, 20, 37, .94));
+  border-color: rgba(109, 132, 187, .25);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .18);
+}
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] textarea,
+:root[data-theme="dark"] select {
+  background: #111c32;
+  border-color: #2a3a5c;
+  color: var(--ink);
+}
+:root[data-theme="dark"] .btn:not(.secondary) {
+  background: linear-gradient(135deg, #8b5cf6, #6d35d8);
+  box-shadow: 0 8px 20px rgba(124, 58, 237, .24);
+}
+:root[data-theme="dark"] .btn.secondary {
+  background: #151f36;
+  border-color: #2d3d60;
+  color: #e8edfb;
+}
+:root[data-theme="dark"] .btn.secondary:hover { background: #202d4b; border-color: #8060e8; }
+:root[data-theme="dark"] .tabs { border-bottom-color: #293958; }
+:root[data-theme="dark"] .tabs button { padding: 12px 18px; }
+:root[data-theme="dark"] .tabs button.on { color: #c4b5fd; border-color: #a855f7; }
+:root[data-theme="dark"] .kanban { gap: 16px; }
+:root[data-theme="dark"] .column {
+  background: rgba(16, 27, 48, .72);
+  border-color: rgba(99, 119, 168, .28);
+  padding: 15px;
+}
+:root[data-theme="dark"] .column h3 { color: #e1e8f8; text-transform: none; font-size: 16px; letter-spacing: -.01em; }
+:root[data-theme="dark"] .column:nth-child(2) h3 { color: #c4b5fd; }
+:root[data-theme="dark"] .column:nth-child(3) h3 { color: #5eead4; }
+:root[data-theme="dark"] .column .count { background: #283652; color: #dbe4fa; }
+:root[data-theme="dark"] .task {
+  background: linear-gradient(145deg, #15213a, #111b30);
+  border-color: #2b3b5c;
+  border-left-width: 3px;
+  padding: 14px;
+}
+:root[data-theme="dark"] .task:hover { border-color: #6d55b8; box-shadow: 0 14px 30px rgba(0, 0, 0, .3); }
+:root[data-theme="dark"] .task-top h4 { font-size: 15px; color: #f5f7ff; }
+:root[data-theme="dark"] .progress { background: #263552; height: 9px; }
+:root[data-theme="dark"] .progress-fill { background: linear-gradient(90deg, #c084fc, #8b5cf6, #22d3ee); }
+:root[data-theme="dark"] .add-task { padding: 14px; border: 1px solid rgba(109, 132, 187, .24); border-radius: 16px; background: rgba(13, 22, 41, .72); }
+:root[data-theme="dark"] .profile-trigger { background: #151f36; border-color: #2d3d60; }
+:root[data-theme="dark"] .user-card { background: rgba(24, 35, 61, .8); }
+
+@media (max-width: 760px) {
+  :root[data-theme="dark"] .main { padding-top: 18px; }
+  :root[data-theme="dark"] .add-task { flex-wrap: wrap; }
+  :root[data-theme="dark"] .add-task input { flex-basis: 100%; }
+}
 
 /* ---------- team & my tasks ---------- */
 .table-wrap { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-sm); }

@@ -8,6 +8,7 @@ const ORGANIZATION_ROLES = [
   "project_manager",
   "team_lead",
   "developer",
+  "member",
   "qa_tester",
   "viewer",
 ];

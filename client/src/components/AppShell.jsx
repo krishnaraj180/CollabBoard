@@ -10,33 +10,6 @@ import { useRealtime } from "../context/RealtimeContext";
 import { Avatar, Logo } from "./ui";
 import { timeAgo } from "../lib/format";
 
-const THEME_KEY = "cb_theme";
-
-function useTheme() {
-  const [theme, setTheme] = useState("light");
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(THEME_KEY);
-      const next = saved || (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-      setTheme(next);
-      document.documentElement.dataset.theme = next;
-    } catch {
-      /* storage unavailable: stay on light */
-    }
-  }, []);
-  function toggle() {
-    const next = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    document.documentElement.dataset.theme = next;
-    try {
-      localStorage.setItem(THEME_KEY, next);
-    } catch {
-      /* ignore */
-    }
-  }
-  return [theme, toggle];
-}
-
 const NAV_ICONS = {
   home: "M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z",
   dash: "M4 4h7v9H4zM13 4h7v5h-7zM13 11h7v9h-7zM4 15h7v5H4z",
@@ -64,7 +37,6 @@ export default function AppShell({ children }) {
   const [logoutOpen, setLogoutOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
-  const [theme, toggleTheme] = useTheme();
   const router = useRouter();
   const pathname = usePathname() || "";
 
@@ -229,14 +201,6 @@ export default function AppShell({ children }) {
             <Logo compact />
           </Link>
           <div className="appbar-actions">
-            <button
-              className="btn secondary icon-btn"
-              onClick={toggleTheme}
-              aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-              title="Toggle theme"
-            >
-              {theme === "dark" ? "☀" : "☾"}
-            </button>
             <div className="bell">
               <button className="btn secondary" onClick={toggleBell} aria-expanded={open}>
                 Alerts

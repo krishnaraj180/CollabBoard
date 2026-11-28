@@ -481,8 +481,8 @@ describe("permissions", () => {
       const wrongWorkspace = await request(app).get(`/api/files/${sharedFile}`).set("Cookie", stranger);
 
       expect(allowed.status).toBe(200);
-      expect(wrongChannel.status).toBe(403);
-      expect(wrongWorkspace.status).toBe(403);
+      expect(wrongChannel.status).toBe(404);
+      expect(wrongWorkspace.status).toBe(404);
     } finally {
       for (const filename of [sharedFile, privateFile]) {
         fs.unlinkSync(require("path").join(dest, filename));
